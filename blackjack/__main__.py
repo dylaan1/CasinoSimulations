@@ -1,9 +1,36 @@
 import argparse
+import sys
 from pathlib import Path
+from tkinter import TclError
 
-from .gui import SimulatorGUI
-from .settings import SimulationSettings, DEFAULT_STRATEGY_FILE
-from .simulator import Simulator
+
+def _bootstrap_imports():
+    """Allow running as both a module and a standalone script.
+
+    When executed directly (e.g. ``python blackjack/__main__.py``), the
+    package-relative imports fail because Python does not set a parent
+    package. This helper detects that scenario, amends ``sys.path`` to include
+    the repository root, and then performs absolute imports so the rest of the
+    file can run normally.
+    """
+
+    global SimulatorGUI, SimulationSettings, DEFAULT_STRATEGY_FILE, Simulator
+
+    try:  # Running as a package ("python -m blackjack")
+        from .gui import SimulatorGUI
+        from .settings import SimulationSettings, DEFAULT_STRATEGY_FILE
+        from .simulator import Simulator
+    except ImportError:
+        package_root = Path(__file__).resolve().parent.parent
+        if str(package_root) not in sys.path:
+            sys.path.insert(0, str(package_root))
+
+        from blackjack.gui import SimulatorGUI
+        from blackjack.settings import SimulationSettings, DEFAULT_STRATEGY_FILE
+        from blackjack.simulator import Simulator
+
+
+_bootstrap_imports()
 
 
 def parse_args() -> SimulationSettings:
@@ -60,5 +87,17 @@ def run_cli():
     sim.close()
 
 
+def main():
+    if len(sys.argv) > 1:
+        run_cli()
+        return
+
+    try:
+        run_gui()
+    except TclError:
+        print("GUI not available. Falling back to CLI.")
+        run_cli()
+
+
 if __name__ == "__main__":
-    run_gui()
+    main()
