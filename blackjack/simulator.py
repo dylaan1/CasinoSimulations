@@ -102,51 +102,62 @@ class Simulator:
     def _format_round(
         self, initial_cards: List[Card], player_hands: List[Hand], dealer_hand: Hand
     ) -> str:
-        def _fmt(rank: str) -> str:
-            """Represent the rank using single-character notation.
+        """Return a human-readable, multi-line summary of the round.
 
-            The simulator records tens as ``"10"`` internally, but the
-            interface displays them as ``"T"`` to keep hand layouts compact
-            (e.g. ``9T`` for a hard 19).
-            """
+        The previous compact encoding (e.g. ``AAvv7s_v8_``) was terse but
+        difficult to parse when inspecting results. This formatter trades a bit
+        of horizontal space for clarity by rendering each hand on its own line
+        with cards, totals, wagers, and status labels.
+        """
 
-            return "T" if rank == "10" else rank
+        suit_glyphs = {
+            "hearts": "♥",
+            "diamonds": "♦",
+            "clubs": "♣",
+            "spades": "♠",
+        }
 
-        player_repr: str
-        if len(player_hands) == 1:
-            hand_obj = player_hands[0]
-            base = "".join(_fmt(c.rank) for c in initial_cards)
-            if hand_obj.surrendered:
-                player_repr = f"{base}|x"
+        def render_card(card: Card) -> str:
+            glyph = suit_glyphs.get(card.suit, "")
+            rank = "T" if card.rank == "10" else card.rank
+            return f"{rank}{glyph}" if glyph else rank
+
+        def describe_hand(hand: Hand, index: int) -> str:
+            cards = ", ".join(render_card(c) for c in hand.cards)
+            total = hand.best_value
+            status: str
+            if hand.surrendered:
+                status = "Surrendered"
+            elif hand.is_blackjack:
+                status = "Blackjack"
+            elif hand.is_bust:
+                status = "Bust"
             else:
-                extra = ""
-                if len(hand_obj.cards) > 2:
-                    extra_cards = hand_obj.cards[2:]
-                    is_double = hand_obj.bet > self.settings.bet_amount
-                    if is_double:
-                        extra += "d" + _fmt(extra_cards[0].rank)
-                    else:
-                        extra += "".join(_fmt(c.rank) for c in extra_cards)
-                player_repr = base + "|" + extra
-                player_repr += "_" if hand_obj.is_bust else "s"
-        else:
-            base = "".join(_fmt(c.rank) for c in initial_cards)
-            parts = []
-            for h in player_hands:
-                seg_cards = h.cards[1:]
-                if h.bet > self.settings.bet_amount and len(seg_cards) >= 2:
-                    seg = "v" + _fmt(seg_cards[0].rank) + "d" + _fmt(seg_cards[1].rank)
-                else:
-                    seg = "v" + "".join(_fmt(c.rank) for c in seg_cards)
-                seg += "_" if h.is_bust else "s"
-                parts.append(seg)
-            player_repr = base + "|" + "_".join(parts)
+                status = f"Finished {total}"
 
-        dealer_base = _fmt(dealer_hand.cards[0].rank)
-        extra = "".join(_fmt(c.rank) for c in dealer_hand.cards[1:])
-        dealer_repr = dealer_base + "|" + extra
-        dealer_repr += "_" if dealer_hand.is_bust else "s"
-        return f"Player Hand: {player_repr}, Dealer Hand: {dealer_repr}"
+            labels = []
+            if hand.is_split_aces:
+                labels.append("Split Aces")
+            elif hand.is_split:
+                labels.append("Split")
+            if hand.bet > self.settings.bet_amount:
+                labels.append("Doubled")
+
+            label_text = f" ({', '.join(labels)})" if labels else ""
+            return (
+                f"  {index}) Bet {hand.bet:.2f}{label_text} — Cards: {cards} — "
+                f"Status: {status}"
+            )
+
+        player_lines = ["Player Hands:"]
+        for idx, hand in enumerate(player_hands, start=1):
+            player_lines.append(describe_hand(hand, idx))
+
+        dealer_cards = ", ".join(render_card(c) for c in dealer_hand.cards)
+        dealer_status = "Bust" if dealer_hand.is_bust else f"Finished {dealer_hand.best_value}"
+        dealer_section = f"Dealer — Cards: {dealer_cards} — Status: {dealer_status}"
+
+        return "\n".join(player_lines + [dealer_section])
 
     def run(self) -> None:
         if self.settings.seed is not None:
