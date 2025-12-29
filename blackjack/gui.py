@@ -24,7 +24,8 @@ class SimulatorGUI:
         # simulation setting variables
         self.bankroll = tk.DoubleVar(value=1000)
         self.trials = tk.IntVar(value=1)
-        self.hands = tk.IntVar(value=6)
+        self.rounds_per_trial = tk.IntVar(value=1)
+        self.hands_per_round = tk.IntVar(value=6)
         self.bet = tk.DoubleVar(value=10)
         self.decks = tk.IntVar(value=6)
         self.payout = tk.StringVar(value="3:2")
@@ -41,6 +42,7 @@ class SimulatorGUI:
 
         self._build_widgets()
         self._update_test_mode_label()
+        self._update_rules_text(self._gather_settings())
 
     def _build_widgets(self):
         fig = Figure(figsize=(6, 4))
@@ -50,6 +52,14 @@ class SimulatorGUI:
             self.root, text="The Simulator is currently in 'Test Mode'", fg="red"
         )
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self.rules_frame = tk.Frame(self.root)
+        self.rules_label = tk.Label(self.rules_frame, anchor="w")
+        rules_font = tkfont.nametofont("TkDefaultFont").copy()
+        rules_font.configure(size=max(rules_font["size"] - 1, 8))
+        self.rules_label.configure(font=rules_font)
+        self.rules_label.pack(side=tk.LEFT, padx=10, pady=(2, 0))
+        self.rules_frame.pack(fill=tk.X)
 
         self.table_frame = tk.Frame(self.root)
         self.table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -91,6 +101,39 @@ class SimulatorGUI:
         else:
             self.test_mode_label.pack_forget()
 
+    def _gather_settings(self) -> SimulationSettings:
+        return SimulationSettings(
+            trials=self.trials.get(),
+            rounds_per_trial=self.rounds_per_trial.get(),
+            hands_per_round=self.hands_per_round.get(),
+            bankroll=float(self.bankroll.get()),
+            blackjack_payout=1.5 if self.payout.get() == "3:2" else 1.2,
+            double_after_split=self.das.get(),
+            resplit_aces=self.rsa.get(),
+            surrender=self.surrender.get(),
+            bet_amount=float(self.bet.get()),
+            num_decks=self.decks.get(),
+            hit_soft_17=self.dealer.get() == "H17",
+            penetration=float(self.penetration.get()),
+            strategy_file=self.strategy_file.get(),
+            database=self.database.get(),
+            seed=int(self.seed.get()) if self.seed.get() else None,
+            test_mode=self.test_mode.get(),
+        )
+
+    def _update_rules_text(self, settings: SimulationSettings):
+        payout_text = "3-2" if settings.blackjack_payout == 1.5 else "6-5"
+        dealer_logic = "H17" if settings.hit_soft_17 else "S17"
+        das_text = "Yes" if settings.double_after_split else "No"
+        rsa_text = "Yes" if settings.resplit_aces else "No"
+        surrender_text = settings.surrender.capitalize()
+        text = (
+            f"# of Decks: {settings.num_decks} | Pen.: {settings.penetration:.2f} | "
+            f"Payout: {payout_text} | Dealer 17 Logic: {dealer_logic} | "
+            f"DAS: {das_text} | RSA: {rsa_text} | Surrender: {surrender_text}"
+        )
+        self.rules_label.configure(text=text)
+
     def open_settings(self):
         if hasattr(self, "settings_win") and self.settings_win.winfo_exists():
             self.settings_win.lift()
@@ -119,10 +162,10 @@ class SimulatorGUI:
         ttk.Separator(frame, orient="horizontal").grid(row=row, column=0, columnspan=4, sticky="ew", pady=5)
         row += 1
 
-        tk.Label(frame, text="Hands/Trial").grid(row=row, column=0, sticky="e")
-        tk.Spinbox(frame, from_=1, to=6, textvariable=self.hands, width=5).grid(row=row, column=1)
-        tk.Label(frame, text="Bet").grid(row=row, column=2, sticky="e")
-        tk.Spinbox(frame, from_=1, to=1000, textvariable=self.bet, width=5).grid(row=row, column=3)
+        tk.Label(frame, text="Rounds/Trial").grid(row=row, column=0, sticky="e")
+        tk.Spinbox(frame, from_=1, to=100, textvariable=self.rounds_per_trial, width=5).grid(row=row, column=1)
+        tk.Label(frame, text="Hands/Round").grid(row=row, column=2, sticky="e")
+        tk.Spinbox(frame, from_=1, to=100, textvariable=self.hands_per_round, width=5).grid(row=row, column=3)
         row += 1
         tk.Label(frame, text="Decks").grid(row=row, column=0, sticky="e")
         tk.Spinbox(frame, from_=1, to=12, textvariable=self.decks, width=5).grid(row=row, column=1)
@@ -159,27 +202,12 @@ class SimulatorGUI:
     def run_simulation(self):
         if self.sim:
             self.sim.close()
-        settings = SimulationSettings(
-            trials=self.trials.get(),
-            hands_per_game=self.hands.get(),
-            bankroll=float(self.bankroll.get()),
-            blackjack_payout=1.5 if self.payout.get() == "3:2" else 1.2,
-            double_after_split=self.das.get(),
-            resplit_aces=self.rsa.get(),
-            surrender=self.surrender.get(),
-            bet_amount=float(self.bet.get()),
-            num_decks=self.decks.get(),
-            hit_soft_17=self.dealer.get() == "H17",
-            penetration=float(self.penetration.get()),
-            strategy_file=self.strategy_file.get(),
-            database=self.database.get(),
-            seed=int(self.seed.get()) if self.seed.get() else None,
-            test_mode=self.test_mode.get(),
-        )
+        settings = self._gather_settings()
         self.sim = Simulator(settings)
         self.sim.run()
         self.plot_trial_spin.config(to=self.trials.get())
         self.plot_trial.set(1)
+        self._update_rules_text(settings)
         self.update_graph()
         self.update_table()
         if not self.sim.results_available:
@@ -242,15 +270,8 @@ class SimulatorGUI:
         df = pd.read_sql_query(
             """
             SELECT
-                sim,
                 trial,
-                decks,
-                penetration,
-                payout,
-                soft17,
-                das,
-                rsa,
-                surrender,
+                round_number,
                 hands,
                 wager,
                 open_bankroll,
@@ -258,7 +279,7 @@ class SimulatorGUI:
                 player_cards,
                 dealer_cards
             FROM temp_results
-            ORDER BY trial
+            ORDER BY trial, round_number, hands
             """,
             self.sim.conn,
         )
@@ -268,25 +289,15 @@ class SimulatorGUI:
             return
 
         display_names = {
-            "sim": "SIM #",
             "trial": "TRIAL #",
-            "decks": "DECKS",
-            "penetration": "PEN.",
-            "payout": "PAYOUT",
-            "soft17": "17",
-            "das": "DAS",
-            "rsa": "RSA",
-            "surrender": "SURRENDER",
-            "hands": "HANDS",
+            "round_number": "ROUND #",
+            "hands": "HAND #",
             "wager": "WAGER",
             "open_bankroll": "OPEN BANKROLL",
             "close_bankroll": "CLOSE BANKROLL",
             "player_cards": "PLAYER HAND",
             "dealer_cards": "DEALER HAND",
         }
-
-        for col in {"das", "rsa"} & set(df.columns):
-            df[col] = df[col].map({0: "N", 1: "Y"})
 
         self.table["columns"] = list(df.columns)
         font = tkfont.nametofont("TkDefaultFont")

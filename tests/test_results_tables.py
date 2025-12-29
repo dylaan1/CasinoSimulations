@@ -8,7 +8,8 @@ def run_sim(tmp_path):
     strategy.write_text("{}")
     settings = SimulationSettings(
         trials=1,
-        hands_per_game=2,
+        rounds_per_trial=1,
+        hands_per_round=2,
         bankroll=10,
         blackjack_payout=1.5,
         double_after_split=True,
