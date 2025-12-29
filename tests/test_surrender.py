@@ -36,7 +36,7 @@ def test_surrender_payout_returns_half_bet():
     settings.bankroll -= bet
     initial = Hand(cards=[Card('9', 'spades'), Card('7', 'hearts')], bet=bet)
     player = Player(settings=settings, strategy=AlwaysSurrenderStrategy())
-    hands = player.play(DummyShoe(), dealer_up='6', initial=initial)
+    hands = player.play(DummyShoe(), dealer_up='6', initial=initial, allow_surrender=True)
     hand = hands[0]
     assert hand.surrendered
     assert hand.bet == bet / 2
@@ -61,12 +61,12 @@ class OptionAwareStrategy:
 
 
 def test_no_surrender_hits_when_disabled():
-    settings = PlayerSettings(bankroll=100, allow_surrender=False)
+    settings = PlayerSettings(bankroll=100, surrender="none")
     bet = 10
     settings.bankroll -= bet
     initial = Hand(cards=[Card('9', 'spades'), Card('7', 'hearts')], bet=bet)
     shoe = CountingShoe()
     player = Player(settings=settings, strategy=OptionAwareStrategy())
-    hands = player.play(shoe, dealer_up='9', initial=initial)
+    hands = player.play(shoe, dealer_up='9', initial=initial, allow_surrender=False)
     hand = hands[0]
     assert not hand.surrendered

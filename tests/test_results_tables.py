@@ -1,5 +1,6 @@
 from blackjack.simulator import Simulator
 from blackjack.settings import SimulationSettings
+from blackjack.simulator import Simulator
 
 
 def run_sim(tmp_path):

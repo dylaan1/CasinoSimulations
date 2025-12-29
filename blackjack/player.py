@@ -12,7 +12,7 @@ class PlayerSettings:
     blackjack_payout: float = 1.5
     double_after_split: bool = True
     resplit_aces: bool = False
-    allow_surrender: bool = True
+    surrender: str = "late"
     bet_amount: float = 1.0  # base wager per hand
 
 @dataclass
@@ -20,22 +20,31 @@ class Player:
     settings: PlayerSettings
     strategy: BasicStrategy
 
-    def play(self, shoe: Shoe, dealer_up: str, initial: Hand) -> List[Hand]:
+    def play(
+        self, shoe: Shoe, dealer_up: str, initial: Hand, allow_surrender: bool | None = None
+    ) -> List[Hand]:
+        surrender_allowed = (
+            self.settings.surrender.lower() != "none" if allow_surrender is None else allow_surrender
+        )
         hands = [initial]
         i = 0
         while i < len(hands):
             hand = hands[i]
-            self._play_hand(hand, shoe, dealer_up, hands)
+            self._play_hand(hand, shoe, dealer_up, hands, surrender_allowed)
             i += 1
+            # After the first decision, surrender is no longer available
+            surrender_allowed = False
         return hands
 
-    def _play_hand(self, hand: Hand, shoe: Shoe, dealer_up: str, hands: List[Hand]) -> None:
+    def _play_hand(
+        self, hand: Hand, shoe: Shoe, dealer_up: str, hands: List[Hand], allow_surrender: bool
+    ) -> None:
         # Surrender decision
         can_double = not hand.is_split or self.settings.double_after_split
         action = self.strategy.decide(hand, dealer_up, {
             "can_double": can_double and not hand.is_split_aces,
             "can_split": hand.can_split,
-            "can_surrender": self.settings.allow_surrender and not hand.is_split,
+            "can_surrender": allow_surrender and not hand.is_split,
         })
         if action == "surrender":
             hand.surrendered = True
