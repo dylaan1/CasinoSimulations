@@ -36,7 +36,8 @@ _bootstrap_imports()
 def parse_args() -> SimulationSettings:
     parser = argparse.ArgumentParser(description="Blackjack simulator")
     parser.add_argument("--trials", type=int, default=100)
-    parser.add_argument("--hands", type=int, default=100)
+    parser.add_argument("--rounds-per-trial", type=int, default=1)
+    parser.add_argument("--hands-per-round", type=int, default=100)
     parser.add_argument("--bankroll", type=float, default=1000.0)
     parser.add_argument("--payout", type=float, default=1.5)
     parser.add_argument("--das", action="store_true")
@@ -54,7 +55,8 @@ def parse_args() -> SimulationSettings:
         parser.error(f"Strategy file '{args.strategy}' not found.")
     settings = SimulationSettings(
         trials=args.trials,
-        hands_per_game=args.hands,
+        rounds_per_trial=args.rounds_per_trial,
+        hands_per_round=args.hands_per_round,
         bankroll=args.bankroll,
         blackjack_payout=args.payout,
         double_after_split=args.das,

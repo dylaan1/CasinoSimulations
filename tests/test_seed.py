@@ -7,7 +7,8 @@ def test_simulator_seed_reproducible(tmp_path):
     strategy_file.write_text("{}")
     settings = SimulationSettings(
         trials=1,
-        hands_per_game=5,
+        rounds_per_trial=1,
+        hands_per_round=5,
         bankroll=10,
         blackjack_payout=1.5,
         double_after_split=True,

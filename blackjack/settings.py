@@ -7,7 +7,8 @@ DEFAULT_STRATEGY_FILE = Path(__file__).resolve().parent.parent / "BJ_basicStrate
 @dataclass
 class SimulationSettings:
     trials: int = 100
-    hands_per_game: int = 100
+    rounds_per_trial: int = 1
+    hands_per_round: int = 100
     bankroll: float = 1000.0
     blackjack_payout: float = 1.5
     double_after_split: bool = True
