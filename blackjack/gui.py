@@ -12,6 +12,13 @@ class SimulatorGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Blackjack Simulator")
+        self.root.update_idletasks()
+        try:
+            self.root.state("zoomed")
+        except tk.TclError:
+            width = self.root.winfo_screenwidth()
+            height = self.root.winfo_screenheight()
+            self.root.geometry(f"{width}x{height}")
         self.sim = None
 
         # simulation setting variables
@@ -24,7 +31,7 @@ class SimulatorGUI:
         self.dealer = tk.StringVar(value="H17")
         self.das = tk.BooleanVar()
         self.rsa = tk.BooleanVar()
-        self.surrender = tk.BooleanVar(value=True)
+        self.surrender = tk.StringVar(value="Late")
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
         self.penetration = tk.DoubleVar(value=0.75)
@@ -45,7 +52,7 @@ class SimulatorGUI:
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.table_frame = tk.Frame(self.root)
-        self.table_frame.pack(fill=tk.BOTH, expand=True)
+        self.table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.table = ttk.Treeview(self.table_frame, show="headings")
         self.table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.table.yview)
@@ -133,8 +140,16 @@ class SimulatorGUI:
 
         tk.Checkbutton(frame, text="DAS", variable=self.das).grid(row=row, column=0, sticky="w")
         tk.Checkbutton(frame, text="RSA", variable=self.rsa).grid(row=row, column=1, sticky="w")
-        tk.Checkbutton(frame, text="Surrender", variable=self.surrender).grid(row=row, column=2, sticky="w")
-        tk.Checkbutton(frame, text="Test Mode", variable=self.test_mode).grid(row=row, column=3, sticky="w")
+        tk.Label(frame, text="Surrender").grid(row=row, column=2, sticky="e")
+        ttk.Combobox(
+            frame,
+            textvariable=self.surrender,
+            values=["Early", "Late", "None"],
+            state="readonly",
+            width=8,
+        ).grid(row=row, column=3, sticky="w")
+        row += 1
+        tk.Checkbutton(frame, text="Test Mode", variable=self.test_mode).grid(row=row, column=0, sticky="w")
         row += 1
 
         tk.Button(frame, text="Close", command=self.settings_win.destroy).grid(
@@ -151,7 +166,7 @@ class SimulatorGUI:
             blackjack_payout=1.5 if self.payout.get() == "3:2" else 1.2,
             double_after_split=self.das.get(),
             resplit_aces=self.rsa.get(),
-            allow_surrender=self.surrender.get(),
+            surrender=self.surrender.get(),
             bet_amount=float(self.bet.get()),
             num_decks=self.decks.get(),
             hit_soft_17=self.dealer.get() == "H17",
@@ -201,33 +216,75 @@ class SimulatorGUI:
         self.ax.plot(df["hand"], df["pl"], color="blue")
         self.canvas.draw()
 
+    def _clear_table(self):
+        self.table.delete(*self.table.get_children())
+        self.table["columns"] = []
+
     def update_table(self):
         if not self.sim:
+            self._clear_table()
             return
         df = pd.read_sql_query(
-            "SELECT * FROM temp_results ORDER BY trial", self.sim.conn
+            """
+            SELECT
+                sim,
+                trial,
+                decks,
+                penetration,
+                payout,
+                soft17,
+                das,
+                rsa,
+                surrender,
+                hands,
+                wager,
+                open_bankroll,
+                close_bankroll,
+                player_cards,
+                dealer_cards
+            FROM temp_results
+            ORDER BY trial
+            """,
+            self.sim.conn,
         )
         self.table.delete(*self.table.get_children())
         if df.empty:
+            self.table["columns"] = []
             return
 
-        # Display booleans as Y/N instead of 1/0
-        bool_cols = {"das", "rsa", "surrender"}
-        for col in bool_cols & set(df.columns):
+        display_names = {
+            "sim": "SIM #",
+            "trial": "TRIAL #",
+            "decks": "DECKS",
+            "penetration": "PEN.",
+            "payout": "PAYOUT",
+            "soft17": "17",
+            "das": "DAS",
+            "rsa": "RSA",
+            "surrender": "SURRENDER",
+            "hands": "HANDS",
+            "wager": "WAGER",
+            "open_bankroll": "OPEN BANKROLL",
+            "close_bankroll": "CLOSE BANKROLL",
+            "player_cards": "PLAYER HAND",
+            "dealer_cards": "DEALER HAND",
+        }
+
+        for col in {"das", "rsa"} & set(df.columns):
             df[col] = df[col].map({0: "N", 1: "Y"})
 
         self.table["columns"] = list(df.columns)
         font = tkfont.nametofont("TkDefaultFont")
         for col in df.columns:
-            values = [str(v) for v in df[col].tolist()] + [col]
-            width = max(font.measure(v) for v in values) + 20
-            is_numeric = pd.api.types.is_numeric_dtype(df[col]) and col not in bool_cols
-            stretch = not (is_numeric or col in bool_cols)
-            self.table.heading(col, text=col)
-            self.table.column(col, width=width, stretch=stretch)
+            header_text = display_names.get(col, col.upper())
+            values = [header_text] + [str(v) for v in df[col].tolist()]
+            width = max(font.measure(v) for v in values) + 12
+            self.table.heading(col, text=header_text)
+            self.table.column(col, width=width, stretch=True, anchor=tk.W)
 
         for _, row in df.iterrows():
             self.table.insert("", tk.END, values=[row[col] for col in df.columns])
+        self.table.update_idletasks()
 
     def save_results(self):
         if self.sim:

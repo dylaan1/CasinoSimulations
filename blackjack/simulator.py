@@ -67,12 +67,13 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
-                surrender INTEGER,
+                surrender TEXT,
                 hands INTEGER,
                 wager REAL,
                 open_bankroll REAL,
                 close_bankroll REAL,
-                cards TEXT
+                player_cards TEXT,
+                dealer_cards TEXT
             )
             """
         )
@@ -87,12 +88,13 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
-                surrender INTEGER,
+                surrender TEXT,
                 hands INTEGER,
                 wager REAL,
                 open_bankroll REAL,
                 close_bankroll REAL,
-                cards TEXT
+                player_cards TEXT,
+                dealer_cards TEXT
             )
             """
         )
@@ -100,15 +102,9 @@ class Simulator:
         self.conn.commit()
 
     def _format_round(
-        self, initial_cards: List[Card], player_hands: List[Hand], dealer_hand: Hand
-    ) -> str:
-        """Return a human-readable, multi-line summary of the round.
-
-        The previous compact encoding (e.g. ``AAvv7s_v8_``) was terse but
-        difficult to parse when inspecting results. This formatter trades a bit
-        of horizontal space for clarity by rendering each hand on its own line
-        with cards, totals, wagers, and status labels.
-        """
+        self, player_hands: List[Hand], dealer_hand: Hand
+    ) -> tuple[str, str]:
+        """Return compact player/dealer summaries for table display."""
 
         suit_glyphs = {
             "hearts": "♥",
@@ -122,48 +118,42 @@ class Simulator:
             rank = "T" if card.rank == "10" else card.rank
             return f"{rank}{glyph}" if glyph else rank
 
-        def describe_hand(hand: Hand, index: int) -> str:
+        def describe(hand: Hand) -> str:
             cards = ", ".join(render_card(c) for c in hand.cards)
-            total = hand.best_value
-            status: str
             if hand.surrendered:
-                status = "Surrendered"
-            elif hand.is_blackjack:
-                status = "Blackjack"
-            elif hand.is_bust:
-                status = "Bust"
-            else:
-                status = f"Finished {total}"
-
-            labels = []
-            if hand.is_split_aces:
-                labels.append("Split Aces")
-            elif hand.is_split:
-                labels.append("Split")
+                return f"{cards} | Surrender"
+            if hand.is_blackjack:
+                return f"{cards} | 21 (Blackjack)"
+            if hand.is_bust:
+                return f"{cards} | {hand.best_value} (Bust)"
+            status = "Stand"
+            tags = []
             if hand.bet > self.settings.bet_amount:
-                labels.append("Doubled")
+                tags.append("Double")
+            if hand.is_split_aces:
+                tags.append("Split Aces")
+            elif hand.is_split:
+                tags.append("Split")
+            if tags:
+                status = f"{status}, {'/'.join(tags)}"
+            return f"{cards} | {hand.best_value} ({status})"
 
-            label_text = f" ({', '.join(labels)})" if labels else ""
-            return (
-                f"  {index}) Bet {hand.bet:.2f}{label_text} — Cards: {cards} — "
-                f"Status: {status}"
+        player_entries = [describe(hand) for hand in player_hands]
+        if len(player_entries) > 1:
+            player_text = " / ".join(
+                f"Hand {idx}: {text}" for idx, text in enumerate(player_entries, start=1)
             )
-
-        player_lines = ["Player Hands:"]
-        for idx, hand in enumerate(player_hands, start=1):
-            player_lines.append(describe_hand(hand, idx))
-
-        dealer_cards = ", ".join(render_card(c) for c in dealer_hand.cards)
-        dealer_status = "Bust" if dealer_hand.is_bust else f"Finished {dealer_hand.best_value}"
-        dealer_section = f"Dealer — Cards: {dealer_cards} — Status: {dealer_status}"
-
-        return "\n".join(player_lines + [dealer_section])
+        else:
+            player_text = player_entries[0]
+        dealer_text = describe(dealer_hand)
+        return player_text, dealer_text
 
     def run(self) -> None:
         if self.settings.seed is not None:
             random.seed(self.settings.seed)
+        allow_surrender = self.settings.surrender.lower() != "none"
         strat = BasicStrategy.from_json(
-            self.settings.strategy_file, allow_surrender=self.settings.allow_surrender
+            self.settings.strategy_file, allow_surrender=allow_surrender
         )
         for trial in range(1, self.settings.trials + 1):
             shoe = Shoe(self.settings.num_decks, penetration=self.settings.penetration)
@@ -172,7 +162,7 @@ class Simulator:
                 blackjack_payout=self.settings.blackjack_payout,
                 double_after_split=self.settings.double_after_split,
                 resplit_aces=self.settings.resplit_aces,
-                allow_surrender=self.settings.allow_surrender,
+                surrender=self.settings.surrender.lower(),
                 bet_amount=self.settings.bet_amount,
             )
             player = Player(player_settings, strat)
@@ -194,9 +184,27 @@ class Simulator:
                 player_hand.add_card(shoe.draw())
                 dealer_hand.add_card(shoe.draw())
 
-                initial_cards = list(player_hand.cards)
-                player_hands = player.play(shoe, dealer_hand.cards[0].rank, player_hand)
-                if any(not h.is_bust and not h.surrendered for h in player_hands):
+                dealer_up = dealer_hand.cards[0].rank
+                dealer_checks_blackjack = dealer_up in {"10", "A"}
+                dealer_has_blackjack = dealer_checks_blackjack and dealer_hand.is_blackjack
+                surrender_setting = self.settings.surrender.lower()
+
+                if surrender_setting == "late" and dealer_has_blackjack:
+                    player_hands = [player_hand]
+                else:
+                    player_hands = player.play(
+                        shoe,
+                        dealer_up,
+                        player_hand,
+                        allow_surrender=allow_surrender,
+                    )
+
+                dealer_blackjack_active = dealer_has_blackjack and any(
+                    not h.surrendered for h in player_hands
+                )
+                if not dealer_blackjack_active and any(
+                    not h.is_bust and not h.surrendered for h in player_hands
+                ):
                     dealer.play(dealer_hand, shoe)
                 for h in player_hands:
                     change = self.resolve_hand(h, dealer_hand, player_settings)
@@ -208,9 +216,9 @@ class Simulator:
                     (trial, hands_played, player_settings.bankroll),
                 )
 
-                layout = self._format_round(initial_cards, player_hands, dealer_hand)
+                player_text, dealer_text = self._format_round(player_hands, dealer_hand)
                 cur.execute(
-                    "INSERT INTO temp_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO temp_results VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         self.sim_number,
                         trial,
@@ -220,12 +228,17 @@ class Simulator:
                         "H17" if self.settings.hit_soft_17 else "S17",
                         int(self.settings.double_after_split),
                         int(self.settings.resplit_aces),
-                        int(self.settings.allow_surrender),
+                        "E"
+                        if surrender_setting == "early"
+                        else "L"
+                        if surrender_setting == "late"
+                        else "N",
                         len(player_hands),
                         self.settings.bet_amount,
                         bankroll_before,
                         player_settings.bankroll,
-                        layout,
+                        player_text,
+                        dealer_text,
                     ),
                 )
             cur.execute(
