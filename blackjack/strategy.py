@@ -24,7 +24,9 @@ class BasicStrategy:
     pair: Dict[str, Dict[str, Action]] = field(default_factory=dict)
 
     @classmethod
-    def from_json(cls, path: str, allow_surrender: bool = True) -> "BasicStrategy":  # pragma: no cover - CLI helper
+    def from_json(
+        cls, path: str, allow_surrender: bool = True
+    ) -> "BasicStrategy":  # pragma: no cover - CLI helper
         """Create a strategy instance from ``path``.
 
         Missing sections in the JSON default to empty dictionaries which
