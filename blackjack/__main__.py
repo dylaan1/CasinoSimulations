@@ -1,5 +1,7 @@
 import argparse
+import sys
 from pathlib import Path
+from tkinter import TclError
 
 from .gui import SimulatorGUI
 from .settings import SimulationSettings, DEFAULT_STRATEGY_FILE
@@ -60,5 +62,17 @@ def run_cli():
     sim.close()
 
 
+def main():
+    if len(sys.argv) > 1:
+        run_cli()
+        return
+
+    try:
+        run_gui()
+    except TclError:
+        print("GUI not available. Falling back to CLI.")
+        run_cli()
+
+
 if __name__ == "__main__":
-    run_gui()
+    main()
