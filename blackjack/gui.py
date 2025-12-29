@@ -182,6 +182,15 @@ class SimulatorGUI:
         self.plot_trial.set(1)
         self.update_graph()
         self.update_table()
+        if not self.sim.results_available:
+            messagebox.showwarning(
+                "No Results", "No hands were played. Check bankroll and bet settings."
+            )
+            self._clear_plot()
+            self._clear_table()
+            self.save_btn.config(state=tk.DISABLED)
+            self.discard_btn.config(state=tk.DISABLED)
+            return
         if self.test_mode.get():
             self.save_btn.config(state=tk.DISABLED)
         else:
@@ -190,6 +199,7 @@ class SimulatorGUI:
 
     def update_graph(self):
         if not self.sim:
+            self._clear_plot()
             return
         trial = self.plot_trial.get()
         df = pd.read_sql_query(
@@ -198,6 +208,7 @@ class SimulatorGUI:
             params=(trial,),
         )
         if df.empty:
+            self._clear_plot()
             return
 
         df["pl"] = df["bankroll"] - self.bankroll.get()
@@ -214,6 +225,10 @@ class SimulatorGUI:
         # Draw a horizontal line at y=0 so it's visually centered
         self.ax.axhline(0, color="gray", linewidth=0.5)
         self.ax.plot(df["hand"], df["pl"], color="blue")
+        self.canvas.draw()
+
+    def _clear_plot(self):
+        self.ax.clear()
         self.canvas.draw()
 
     def _clear_table(self):

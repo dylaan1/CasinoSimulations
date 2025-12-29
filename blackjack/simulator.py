@@ -30,9 +30,11 @@ class Simulator:
         self.settings = settings
         self.conn = sqlite3.connect(self.settings.database)
         self._init_db()
+        self._reset_temp_tables()
         cur = self.conn.cursor()
         cur.execute("SELECT COALESCE(MAX(sim), 0) FROM results")
         self.sim_number = cur.fetchone()[0] + 1
+        self.results_available = False
 
     def _init_db(self) -> None:
         cur = self.conn.cursor()
@@ -101,6 +103,12 @@ class Simulator:
 
         self.conn.commit()
 
+    def _reset_temp_tables(self) -> None:
+        cur = self.conn.cursor()
+        for _, temp in TABLE_PAIRS:
+            cur.execute(f"DELETE FROM {temp}")
+        self.conn.commit()
+
     def _format_round(
         self, player_hands: List[Hand], dealer_hand: Hand
     ) -> tuple[str, str]:
@@ -155,6 +163,7 @@ class Simulator:
         strat = BasicStrategy.from_json(
             self.settings.strategy_file, allow_surrender=allow_surrender
         )
+        total_hands = 0
         for trial in range(1, self.settings.trials + 1):
             shoe = Shoe(self.settings.num_decks, penetration=self.settings.penetration)
             player_settings = PlayerSettings(
@@ -210,6 +219,7 @@ class Simulator:
                     change = self.resolve_hand(h, dealer_hand, player_settings)
                     player_settings.bankroll += change
                 hands_played += len(player_hands)
+                total_hands += len(player_hands)
 
                 cur.execute(
                     "INSERT INTO temp_bankroll VALUES (?,?,?)",
@@ -253,6 +263,7 @@ class Simulator:
                     (trial, rank, count),
                 )
             self.conn.commit()
+        self.results_available = total_hands > 0
 
     def save_results(self) -> None:
         """Persist temporary tables into permanent storage."""
