@@ -20,6 +20,10 @@ class SimulatorGUI:
             height = self.root.winfo_screenheight()
             self.root.geometry(f"{width}x{height}")
         self.sim = None
+        self.available_trials: list[int] = []
+
+        self.hover_annotation = None
+        self._last_plots: list[tuple[int, pd.DataFrame]] = []
 
         # simulation setting variables
         self.bankroll = tk.DoubleVar(value=1000)
@@ -41,6 +45,8 @@ class SimulatorGUI:
         self.das.trace_add("write", lambda *args: self._update_das_switch_label())
         self.test_mode.trace_add("write", lambda *args: self._update_test_mode_label())
 
+        self.trial_filter = tk.StringVar(value="all")
+
         self._build_widgets()
         self._update_test_mode_label()
 
@@ -53,9 +59,9 @@ class SimulatorGUI:
         )
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        self.settings_bar = ttk.Frame(self.root, padding=(10, 6))
-        self._build_settings_bar()
-        self.settings_bar.pack(fill=tk.X)
+        self.canvas.mpl_connect("motion_notify_event", self._on_hover)
+
+        self._build_chart_controls()
 
         self.table_frame = tk.Frame(self.root)
         self.table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -65,6 +71,10 @@ class SimulatorGUI:
         self.table.configure(yscrollcommand=scroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
+        self.settings_bar = ttk.Frame(self.root, padding=(10, 6))
+        self._build_settings_bar()
+        self.settings_bar.pack(fill=tk.X, pady=(0, 8))
+
         controls = tk.Frame(self.root)
         controls.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -73,113 +83,123 @@ class SimulatorGUI:
         self.save_btn.pack(side=tk.LEFT)
         self.discard_btn = tk.Button(controls, text="Discard", command=self.discard_results, state=tk.DISABLED)
         self.discard_btn.pack(side=tk.LEFT)
-
-        tk.Label(controls, text="Plot Trial").pack(side=tk.LEFT)
-        self.plot_trial = tk.IntVar(value=1)
-        self.plot_trial_spin = tk.Spinbox(
-            controls,
-            from_=1,
-            to=1,
-            textvariable=self.plot_trial,
-            command=self.update_graph,
-            width=5,
-        )
-        self.plot_trial_spin.pack(side=tk.LEFT)
-
         tk.Button(controls, text="Exit", command=self.exit_prompt).pack(side=tk.RIGHT)
         tk.Button(controls, text="Seed", command=self.open_settings).pack(side=tk.RIGHT)
 
     def _build_settings_bar(self):
-        label_font = tkfont.nametofont("TkDefaultFont").copy()
+        base_font = tkfont.nametofont("TkDefaultFont")
+        label_font = base_font.copy()
         label_font.configure(size=max(label_font["size"] - 1, 9))
-
-        content = ttk.Frame(self.settings_bar)
-        content.pack(fill=tk.X)
-
-        def add_row(row: int, col: int, text: str, widget: tk.Widget):
-            ttk.Label(content, text=text, font=label_font).grid(
-                row=row, column=col * 2, sticky="e", padx=(0, 4), pady=4
-            )
-            widget.grid(row=row, column=col * 2 + 1, sticky="w", padx=(0, 12), pady=4)
-
-        bankroll_entry = ttk.Entry(content, textvariable=self.bankroll, width=10)
-        trials_spin = tk.Spinbox(content, from_=1, to=1000, textvariable=self.trials, width=6)
-        rounds_spin = tk.Spinbox(content, from_=1, to=100, textvariable=self.rounds_per_trial, width=6)
-        hands_spin = tk.Spinbox(content, from_=1, to=100, textvariable=self.hands_per_round, width=6)
-        bet_entry = ttk.Entry(content, textvariable=self.bet, width=10)
-        decks_spin = tk.Spinbox(content, from_=1, to=12, textvariable=self.decks, width=6)
-        pen_spin = tk.Spinbox(content, from_=0.25, to=0.95, increment=0.01, textvariable=self.penetration, width=6)
+        section_font = base_font.copy()
+        section_font.configure(size=max(section_font["size"] - 2, 9), weight="bold")
 
         payout_combo = ttk.Combobox(
-            content, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=5
+            self.settings_bar, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=4
         )
         dealer_combo = ttk.Combobox(
-            content, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=5
+            self.settings_bar, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=4
         )
 
         self.das_switch_text = tk.StringVar()
         self._update_das_switch_label()
-        das_toggle = tk.Checkbutton(
-            content,
-            textvariable=self.das_switch_text,
-            variable=self.das,
-            indicatoron=False,
-            width=6,
-        )
+        das_toggle = self._build_switch(self.settings_bar, self.das)
 
         split_aces_combo = ttk.Combobox(
-            content,
+            self.settings_bar,
             textvariable=self.split_aces_logic,
             values=["Single", "Carnival"],
-            state="readonly",
-            width=10,
-        )
-
-        surrender_combo = ttk.Combobox(
-            content,
-            textvariable=self.surrender,
-            values=["Early", "Late", "None"],
             state="readonly",
             width=8,
         )
 
-        test_mode_check = ttk.Checkbutton(content, text="Test Mode", variable=self.test_mode)
+        surrender_combo = ttk.Combobox(
+            self.settings_bar,
+            textvariable=self.surrender,
+            values=["Early", "Late", "None"],
+            state="readonly",
+            width=7,
+        )
+
+        test_mode_toggle = self._build_switch(self.settings_bar, self.test_mode)
 
         strategy_combo = ttk.Combobox(
-            content,
+            self.settings_bar,
             textvariable=self.strategy_file,
             values=[self.strategy_file.get()],
             state="readonly",
-            width=max(15, len(self.strategy_file.get())),
+            width=max(18, len(self.strategy_file.get())),
         )
         database_combo = ttk.Combobox(
-            content,
+            self.settings_bar,
             textvariable=self.database,
             values=[self.database.get()],
             state="readonly",
-            width=max(15, len(self.database.get())),
+            width=max(18, len(self.database.get())),
         )
 
-        add_row(0, 0, "Bankroll", bankroll_entry)
-        add_row(0, 1, "Bet", bet_entry)
-        add_row(0, 2, "Trials", trials_spin)
-        add_row(0, 3, "Rounds/Trial", rounds_spin)
-        add_row(0, 4, "Hands/Round", hands_spin)
-        add_row(0, 5, "Decks", decks_spin)
-        add_row(0, 6, "Penetration", pen_spin)
+        bankroll_entry = ttk.Entry(self.settings_bar, textvariable=self.bankroll, width=12)
+        trials_spin = tk.Spinbox(self.settings_bar, from_=1, to=1000, textvariable=self.trials, width=6)
+        rounds_spin = tk.Spinbox(self.settings_bar, from_=1, to=100, textvariable=self.rounds_per_trial, width=6)
+        hands_spin = tk.Spinbox(self.settings_bar, from_=1, to=100, textvariable=self.hands_per_round, width=6)
+        bet_entry = ttk.Entry(self.settings_bar, textvariable=self.bet, width=12)
+        decks_spin = tk.Spinbox(self.settings_bar, from_=1, to=12, textvariable=self.decks, width=6)
+        pen_spin = tk.Spinbox(self.settings_bar, from_=0.25, to=0.95, increment=0.01, textvariable=self.penetration, width=6)
 
-        add_row(1, 0, "Payout", payout_combo)
-        add_row(1, 1, "Dealer 17 Logic", dealer_combo)
-        add_row(1, 2, "Double After Split", das_toggle)
-        add_row(1, 3, "Split Aces Logic", split_aces_combo)
-        add_row(1, 4, "Surrender", surrender_combo)
-        add_row(1, 5, "Test Mode", test_mode_check)
+        def build_bin(parent: tk.Widget, label: str, control: tk.Widget) -> ttk.Frame:
+            frame = ttk.Frame(parent, padding=(6, 2))
+            ttk.Label(frame, text=label, font=label_font, anchor="center").pack(
+                side=tk.TOP, fill=tk.X
+            )
+            control.pack(side=tk.TOP, pady=(4, 2))
+            return frame
 
-        add_row(2, 0, "Strategy", strategy_combo)
-        add_row(2, 2, "Database", database_combo)
+        def add_row(title: str, bins: list[ttk.Frame]):
+            row_frame = ttk.Frame(self.settings_bar)
+            row_frame.pack(fill=tk.X, pady=(2, 6))
+            ttk.Label(row_frame, text=title, font=section_font).grid(
+                row=0, column=0, sticky="nw", padx=(0, 12)
+            )
+            bins_frame = ttk.Frame(row_frame)
+            bins_frame.grid(row=1, column=0, sticky="ew")
+            for col in range(len(bins) * 2 - 1):
+                bins_frame.columnconfigure(col, weight=1)
 
-        for i in range(14):
-            content.columnconfigure(i, weight=1)
+            for idx, bin_frame in enumerate(bins):
+                bin_frame.grid(row=0, column=idx * 2, sticky="nsew", padx=6)
+                if idx < len(bins) - 1:
+                    ttk.Separator(bins_frame, orient="vertical").grid(
+                        row=0, column=idx * 2 + 1, sticky="ns", padx=4, pady=4
+                    )
+
+        sim_bins = [
+            build_bin(self.settings_bar, "Bankroll", bankroll_entry),
+            build_bin(self.settings_bar, "Bet", bet_entry),
+        ]
+        sim_bins += [
+            build_bin(self.settings_bar, "Trials", trials_spin),
+            build_bin(self.settings_bar, "Rounds/Trial", rounds_spin),
+            build_bin(self.settings_bar, "Hands/Round", hands_spin),
+            build_bin(self.settings_bar, "Decks", decks_spin),
+            build_bin(self.settings_bar, "Penetration", pen_spin),
+        ]
+
+        rules_bins = [
+            build_bin(self.settings_bar, "Payout", payout_combo),
+            build_bin(self.settings_bar, "Dealer 17 Logic", dealer_combo),
+            build_bin(self.settings_bar, "Double After Split", das_toggle),
+            build_bin(self.settings_bar, "Split Aces Logic", split_aces_combo),
+            build_bin(self.settings_bar, "Surrender", surrender_combo),
+        ]
+
+        data_bins = [
+            build_bin(self.settings_bar, "Strategy", strategy_combo),
+            build_bin(self.settings_bar, "Database", database_combo),
+            build_bin(self.settings_bar, "Test Mode", test_mode_toggle),
+        ]
+
+        add_row("SIMULATION SETTINGS", sim_bins)
+        add_row("GAME RULES", rules_bins)
+        add_row("DATA", data_bins)
 
     def _update_das_switch_label(self):
         self.das_switch_text.set("On" if self.das.get() else "Off")
@@ -191,6 +211,45 @@ class SimulatorGUI:
             )
         else:
             self.test_mode_label.pack_forget()
+
+    def _build_chart_controls(self):
+        controls = ttk.Frame(self.root, padding=(10, 4))
+        controls.pack(fill=tk.X)
+        ttk.Label(controls, text="TRIAL VIEW", font=(None, 9, "bold")).pack(
+            side=tk.LEFT, padx=(0, 8)
+        )
+        ttk.Label(controls, text="Enter 'all' or a list/range (e.g. 1,3-5):").pack(
+            side=tk.LEFT
+        )
+        entry = ttk.Entry(controls, textvariable=self.trial_filter, width=20)
+        entry.pack(side=tk.LEFT, padx=(6, 6))
+        entry.bind("<Return>", lambda event: self.update_graph())
+        ttk.Button(controls, text="Apply", command=self.update_graph).pack(side=tk.LEFT)
+        ttk.Button(controls, text="Show All", command=self._show_all_trials).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+
+    def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
+        frame = ttk.Frame(parent)
+        canvas = tk.Canvas(frame, width=48, height=26, highlightthickness=0, bg=frame.cget("background"))
+        canvas.pack()
+
+        def redraw(*_):
+            canvas.delete("all")
+            is_on = variable.get()
+            bg_color = "#4cd964" if is_on else "#d5d5d5"
+            knob_x = 26 if is_on else 10
+            canvas.create_rectangle(2, 8, 46, 18, outline="", fill=bg_color, width=0)
+            canvas.create_oval(knob_x - 10, 6, knob_x + 10, 26, fill="white", outline="#aaaaaa")
+
+        def toggle(event=None):
+            variable.set(not variable.get())
+            redraw()
+
+        canvas.bind("<Button-1>", toggle)
+        variable.trace_add("write", redraw)
+        redraw()
+        return frame
 
     def _gather_settings(self) -> SimulationSettings:
         return SimulationSettings(
@@ -233,8 +292,8 @@ class SimulatorGUI:
         settings = self._gather_settings()
         self.sim = Simulator(settings)
         self.sim.run()
-        self.plot_trial_spin.config(to=self.trials.get())
-        self.plot_trial.set(1)
+        self.available_trials = list(range(1, self.trials.get() + 1))
+        self.trial_filter.set("all")
         self.update_graph()
         self.update_table()
         if not self.sim.results_available:
@@ -243,6 +302,8 @@ class SimulatorGUI:
             )
             self._clear_plot()
             self._clear_table()
+            self.available_trials = []
+            self.trial_filter.set("all")
             self.save_btn.config(state=tk.DISABLED)
             self.discard_btn.config(state=tk.DISABLED)
             return
@@ -256,39 +317,134 @@ class SimulatorGUI:
         if not self.sim:
             self._clear_plot()
             return
-        trial = self.plot_trial.get()
         df = pd.read_sql_query(
-            "SELECT hand, bankroll FROM temp_bankroll WHERE trial=? ORDER BY hand",
+            "SELECT trial, hand, bankroll FROM temp_bankroll ORDER BY trial, hand",
             self.sim.conn,
-            params=(trial,),
         )
         if df.empty:
             self._clear_plot()
             return
 
+        selected_trials = self._parse_trial_selection()
+        if not selected_trials:
+            messagebox.showwarning("Invalid Selection", "No valid trials were selected.")
+            self._show_all_trials()
+            return
+
+        df = df[df["trial"].isin(selected_trials)].copy()
+        if df.empty:
+            self._clear_plot()
+            return
+
         df["pl"] = df["bankroll"] - self.bankroll.get()
-        xmin = 0
-        xmax = max(100, df["hand"].max())
-        ymin = -self.bankroll.get()
-        ymax = self.bankroll.get() * 2
 
         self.ax.clear()
         self.ax.set_xlabel("Total Hands Played")
         self.ax.set_ylabel("P/L")
+        self.ax.axhline(0, color="gray", linewidth=0.5)
+        self.ax.grid(True, axis="x", color="#a05f5f", alpha=0.25)
+        self.ax.grid(True, axis="y", color="#5f748c", alpha=0.25)
+
+        self._last_plots = []
+        xmin = 0
+        xmax = max(100, df["hand"].max())
+        ymin = min(df["pl"].min(), -self.bankroll.get())
+        ymax = max(df["pl"].max(), self.bankroll.get())
+
+        color_cycle = self.ax._get_lines.prop_cycler
+        for trial in sorted(selected_trials):
+            trial_df = df[df["trial"] == trial]
+            if trial_df.empty:
+                continue
+            color = next(color_cycle)["color"]
+            self.ax.plot(trial_df["hand"], trial_df["pl"], label=f"Trial {trial}", color=color)
+            self._last_plots.append((trial, trial_df[["hand", "pl"]].reset_index(drop=True)))
+
         self.ax.set_xlim(xmin, xmax)
         self.ax.set_ylim(ymin, ymax)
-        # Draw a horizontal line at y=0 so it's visually centered
-        self.ax.axhline(0, color="gray", linewidth=0.5)
-        self.ax.plot(df["hand"], df["pl"], color="blue")
+        if len(selected_trials) > 1:
+            self.ax.legend()
+
         self.canvas.draw()
 
     def _clear_plot(self):
         self.ax.clear()
+        if self.hover_annotation:
+            self.hover_annotation.set_visible(False)
+        self._last_plots = []
         self.canvas.draw()
 
     def _clear_table(self):
         self.table.delete(*self.table.get_children())
         self.table["columns"] = []
+
+    def _parse_trial_selection(self) -> list[int]:
+        raw = self.trial_filter.get().strip().lower()
+        if not raw or raw == "all":
+            return self.available_trials
+
+        selected: set[int] = set()
+        for part in raw.replace(" ", "").split(","):
+            if not part:
+                continue
+            if "-" in part:
+                try:
+                    start, end = part.split("-", 1)
+                    start_val, end_val = int(start), int(end)
+                    if start_val > end_val:
+                        start_val, end_val = end_val, start_val
+                    selected.update(range(start_val, end_val + 1))
+                except ValueError:
+                    continue
+            else:
+                try:
+                    selected.add(int(part))
+                except ValueError:
+                    continue
+
+        return [t for t in sorted(selected) if t in self.available_trials]
+
+    def _show_all_trials(self):
+        self.trial_filter.set("all")
+        self.update_graph()
+
+    def _on_hover(self, event):
+        if not hasattr(self, "_last_plots") or not self._last_plots or event.inaxes != self.ax:
+            if self.hover_annotation:
+                self.hover_annotation.set_visible(False)
+                self.canvas.draw_idle()
+            return
+
+        if event.xdata is None:
+            return
+
+        closest = None
+        for trial, data in self._last_plots:
+            idx = (data["hand"] - event.xdata).abs().idxmin()
+            point = data.loc[idx]
+            if closest is None or abs(point["hand"] - event.xdata) < abs(closest[1]["hand"] - event.xdata):
+                closest = (trial, point)
+
+        if not closest:
+            return
+
+        trial, point = closest
+        text = f"Trial {trial}: Hand {int(point['hand'])}, P/L {point['pl']:.2f}"
+
+        if not self.hover_annotation:
+            self.hover_annotation = self.ax.annotate(
+                text,
+                xy=(point["hand"], point["pl"]),
+                xytext=(12, 12),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round", fc="w", ec="#888", alpha=0.9),
+            )
+        else:
+            self.hover_annotation.xy = (point["hand"], point["pl"])
+            self.hover_annotation.set_text(text)
+            self.hover_annotation.set_visible(True)
+
+        self.canvas.draw_idle()
 
     def update_table(self):
         if not self.sim:
@@ -360,6 +516,9 @@ class SimulatorGUI:
             self.save_btn.config(state=tk.DISABLED)
             self.discard_btn.config(state=tk.DISABLED)
             self.update_table()
+            self._clear_plot()
+            self.available_trials = []
+            self.trial_filter.set("all")
 
     def has_unsaved_data(self) -> bool:
         if not self.sim:
