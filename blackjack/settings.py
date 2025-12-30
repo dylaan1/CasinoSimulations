@@ -12,7 +12,7 @@ class SimulationSettings:
     bankroll: float = 1000.0
     blackjack_payout: float = 1.5
     double_after_split: bool = True
-    resplit_aces: bool = False
+    split_aces_logic: str = "Single"
     surrender: str = "Late"
     bet_amount: float = 1.0
     num_decks: int = 6

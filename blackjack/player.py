@@ -11,7 +11,7 @@ class PlayerSettings:
     bankroll: float
     blackjack_payout: float = 1.5
     double_after_split: bool = True
-    resplit_aces: bool = False
+    split_aces_logic: str = "Single"
     surrender: str = "late"
     bet_amount: float = 1.0  # base wager per hand
 
@@ -39,6 +39,9 @@ class Player:
     def _play_hand(
         self, hand: Hand, shoe: Shoe, dealer_up: str, hands: List[Hand], allow_surrender: bool
     ) -> None:
+        split_logic = self.settings.split_aces_logic.lower()
+        carnival_split = split_logic == "carnival"
+
         # Surrender decision
         can_double = not hand.is_split or self.settings.double_after_split
         action = self.strategy.decide(hand, dealer_up, {
@@ -53,18 +56,31 @@ class Player:
         while True:
             if hand.is_blackjack or hand.is_bust:
                 return
-            if hand.is_split_aces and len(hand.cards) == 2 and (
-                not self.settings.resplit_aces or hand.cards[1].rank != "A"
-            ):
-                return
-            can_double = (
-                len(hand.cards) == 2
-                and (not hand.is_split or self.settings.double_after_split)
-                and not hand.is_split_aces
+            if hand.is_split_aces:
+                if not carnival_split and len(hand.cards) >= 2:
+                    return
+                if carnival_split and len(hand.cards) == 2 and hand.cards[1].rank == "A":
+                    ace_hands = sum(1 for h in hands if h.is_split_aces)
+                    if ace_hands >= 4:
+                        return
+
+            can_split = hand.can_split
+            if hand.can_split and hand.cards[0].rank == "A":
+                ace_hands = sum(1 for h in hands if h.is_split_aces)
+                if hand.is_split_aces:
+                    can_split = carnival_split and ace_hands < 4
+                else:
+                    can_split = True
+            can_double = len(hand.cards) == 2 and (
+                (not hand.is_split or self.settings.double_after_split)
+                and (
+                    not hand.is_split_aces
+                    or (carnival_split and hand.cards[-1].rank != "A")
+                )
             )
             action = self.strategy.decide(hand, dealer_up, {
                 "can_double": can_double,
-                "can_split": hand.can_split,
+                "can_split": can_split,
                 "can_surrender": False,
             })
             if action == "stand":
@@ -74,11 +90,11 @@ class Player:
                 hand.bet *= 2
                 hand.add_card(shoe.draw())
                 return
-            if action == "split" and hand.can_split and self.settings.bankroll >= hand.bet:
+            if action == "split" and can_split and self.settings.bankroll >= hand.bet:
                 rank = hand.cards[0].rank
                 if rank == "A":
                     ace_hands = sum(1 for h in hands if h.is_split_aces)
-                    if hand.is_split_aces and (not self.settings.resplit_aces or ace_hands >= 4):
+                    if hand.is_split_aces and (not carnival_split or ace_hands >= 4):
                         action = "hit"
                     else:
                         self.settings.bankroll -= hand.bet
