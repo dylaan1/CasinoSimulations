@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 from tkinter import TclError
@@ -96,6 +97,10 @@ def run_cli():
 
 def main():
     if len(sys.argv) > 1:
+        run_cli()
+        return
+
+    if not os.environ.get("DISPLAY"):
         run_cli()
         return
 
