@@ -77,6 +77,7 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
+                split_aces_logic TEXT,
                 surrender TEXT,
                 hands INTEGER,
                 wager REAL,
@@ -99,6 +100,7 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
+                split_aces_logic TEXT,
                 surrender TEXT,
                 hands INTEGER,
                 wager REAL,
@@ -112,6 +114,7 @@ class Simulator:
 
         for table in ("results", "temp_results"):
             self._ensure_column(table, "round_number", "INTEGER")
+            self._ensure_column(table, "split_aces_logic", "TEXT")
 
         self.conn.commit()
 
@@ -176,7 +179,7 @@ class Simulator:
                 bankroll=self.settings.bankroll,
                 blackjack_payout=self.settings.blackjack_payout,
                 double_after_split=self.settings.double_after_split,
-                resplit_aces=self.settings.resplit_aces,
+                split_aces_logic=self.settings.split_aces_logic,
                 surrender=self.settings.surrender.lower(),
                 bet_amount=self.settings.bet_amount,
             )
@@ -250,6 +253,7 @@ class Simulator:
                                 soft17,
                                 das,
                                 rsa,
+                                split_aces_logic,
                                 surrender,
                                 hands,
                                 wager,
@@ -257,7 +261,7 @@ class Simulator:
                                 close_bankroll,
                                 player_cards,
                                 dealer_cards
-                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             (
                                 self.sim_number,
@@ -270,7 +274,8 @@ class Simulator:
                                 else "6:5",
                                 "H17" if self.settings.hit_soft_17 else "S17",
                                 int(self.settings.double_after_split),
-                                int(self.settings.resplit_aces),
+                                1 if self.settings.split_aces_logic.lower() == "carnival" else 0,
+                                self.settings.split_aces_logic,
                                 "E"
                                 if surrender_setting == "early"
                                 else "L"

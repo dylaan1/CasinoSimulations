@@ -41,7 +41,12 @@ def parse_args() -> SimulationSettings:
     parser.add_argument("--bankroll", type=float, default=1000.0)
     parser.add_argument("--payout", type=float, default=1.5)
     parser.add_argument("--das", action="store_true")
-    parser.add_argument("--resplit-aces", action="store_true")
+    parser.add_argument(
+        "--split-aces-logic",
+        choices=["single", "carnival"],
+        default="single",
+        help="Choose split-aces behavior (single or carnival)",
+    )
     parser.add_argument("--bet", type=float, default=1.0, help="Base wager per hand")
     parser.add_argument("--decks", type=int, default=6)
     parser.add_argument("--h17", action="store_true", help="Dealer hits on soft 17")
@@ -60,7 +65,7 @@ def parse_args() -> SimulationSettings:
         bankroll=args.bankroll,
         blackjack_payout=args.payout,
         double_after_split=args.das,
-        resplit_aces=args.resplit_aces,
+        split_aces_logic=args.split_aces_logic.title(),
         bet_amount=args.bet,
         num_decks=args.decks,
         hit_soft_17=args.h17,

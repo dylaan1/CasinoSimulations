@@ -31,18 +31,18 @@ class SimulatorGUI:
         self.payout = tk.StringVar(value="3:2")
         self.dealer = tk.StringVar(value="H17")
         self.das = tk.BooleanVar()
-        self.rsa = tk.BooleanVar()
+        self.split_aces_logic = tk.StringVar(value="Single")
         self.surrender = tk.StringVar(value="Late")
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
         self.penetration = tk.DoubleVar(value=0.75)
         self.seed = tk.StringVar()
         self.test_mode = tk.BooleanVar()
+        self.das.trace_add("write", lambda *args: self._update_das_switch_label())
         self.test_mode.trace_add("write", lambda *args: self._update_test_mode_label())
 
         self._build_widgets()
         self._update_test_mode_label()
-        self._update_rules_text(self._gather_settings())
 
     def _build_widgets(self):
         fig = Figure(figsize=(6, 4))
@@ -53,13 +53,9 @@ class SimulatorGUI:
         )
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        self.rules_frame = tk.Frame(self.root)
-        self.rules_label = tk.Label(self.rules_frame, anchor="w")
-        rules_font = tkfont.nametofont("TkDefaultFont").copy()
-        rules_font.configure(size=max(rules_font["size"] - 1, 8))
-        self.rules_label.configure(font=rules_font)
-        self.rules_label.pack(side=tk.LEFT, padx=10, pady=(2, 0))
-        self.rules_frame.pack(fill=tk.X)
+        self.settings_bar = ttk.Frame(self.root, padding=(10, 6))
+        self._build_settings_bar()
+        self.settings_bar.pack(fill=tk.X)
 
         self.table_frame = tk.Frame(self.root)
         self.table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -91,7 +87,102 @@ class SimulatorGUI:
         self.plot_trial_spin.pack(side=tk.LEFT)
 
         tk.Button(controls, text="Exit", command=self.exit_prompt).pack(side=tk.RIGHT)
-        tk.Button(controls, text="Settings", command=self.open_settings).pack(side=tk.RIGHT)
+        tk.Button(controls, text="Seed", command=self.open_settings).pack(side=tk.RIGHT)
+
+    def _build_settings_bar(self):
+        label_font = tkfont.nametofont("TkDefaultFont").copy()
+        label_font.configure(size=max(label_font["size"] - 1, 9))
+
+        content = ttk.Frame(self.settings_bar)
+        content.pack(fill=tk.X)
+
+        def add_row(row: int, col: int, text: str, widget: tk.Widget):
+            ttk.Label(content, text=text, font=label_font).grid(
+                row=row, column=col * 2, sticky="e", padx=(0, 4), pady=4
+            )
+            widget.grid(row=row, column=col * 2 + 1, sticky="w", padx=(0, 12), pady=4)
+
+        bankroll_entry = ttk.Entry(content, textvariable=self.bankroll, width=10)
+        trials_spin = tk.Spinbox(content, from_=1, to=1000, textvariable=self.trials, width=6)
+        rounds_spin = tk.Spinbox(content, from_=1, to=100, textvariable=self.rounds_per_trial, width=6)
+        hands_spin = tk.Spinbox(content, from_=1, to=100, textvariable=self.hands_per_round, width=6)
+        bet_entry = ttk.Entry(content, textvariable=self.bet, width=10)
+        decks_spin = tk.Spinbox(content, from_=1, to=12, textvariable=self.decks, width=6)
+        pen_spin = tk.Spinbox(content, from_=0.25, to=0.95, increment=0.01, textvariable=self.penetration, width=6)
+
+        payout_combo = ttk.Combobox(
+            content, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=5
+        )
+        dealer_combo = ttk.Combobox(
+            content, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=5
+        )
+
+        self.das_switch_text = tk.StringVar()
+        self._update_das_switch_label()
+        das_toggle = tk.Checkbutton(
+            content,
+            textvariable=self.das_switch_text,
+            variable=self.das,
+            indicatoron=False,
+            width=6,
+        )
+
+        split_aces_combo = ttk.Combobox(
+            content,
+            textvariable=self.split_aces_logic,
+            values=["Single", "Carnival"],
+            state="readonly",
+            width=10,
+        )
+
+        surrender_combo = ttk.Combobox(
+            content,
+            textvariable=self.surrender,
+            values=["Early", "Late", "None"],
+            state="readonly",
+            width=8,
+        )
+
+        test_mode_check = ttk.Checkbutton(content, text="Test Mode", variable=self.test_mode)
+
+        strategy_combo = ttk.Combobox(
+            content,
+            textvariable=self.strategy_file,
+            values=[self.strategy_file.get()],
+            state="readonly",
+            width=max(15, len(self.strategy_file.get())),
+        )
+        database_combo = ttk.Combobox(
+            content,
+            textvariable=self.database,
+            values=[self.database.get()],
+            state="readonly",
+            width=max(15, len(self.database.get())),
+        )
+
+        add_row(0, 0, "Bankroll", bankroll_entry)
+        add_row(0, 1, "Bet", bet_entry)
+        add_row(0, 2, "Trials", trials_spin)
+        add_row(0, 3, "Rounds/Trial", rounds_spin)
+        add_row(0, 4, "Hands/Round", hands_spin)
+        add_row(0, 5, "Decks", decks_spin)
+        add_row(0, 6, "Penetration", pen_spin)
+
+        add_row(1, 0, "Payout", payout_combo)
+        add_row(1, 1, "Dealer 17 Logic", dealer_combo)
+        add_row(1, 2, "Double After Split", das_toggle)
+        add_row(1, 3, "Split Aces Logic", split_aces_combo)
+        add_row(1, 4, "Surrender", surrender_combo)
+        add_row(1, 5, "Test Mode", test_mode_check)
+
+        add_row(2, 0, "Strategy", strategy_combo)
+        add_row(2, 2, "Database", database_combo)
+
+        for i in range(14):
+            content.columnconfigure(i, weight=1)
+
+    def _update_das_switch_label(self):
+        self.das_switch_text.set("On" if self.das.get() else "Off")
 
     def _update_test_mode_label(self):
         if self.test_mode.get():
@@ -109,7 +200,7 @@ class SimulatorGUI:
             bankroll=float(self.bankroll.get()),
             blackjack_payout=1.5 if self.payout.get() == "3:2" else 1.2,
             double_after_split=self.das.get(),
-            resplit_aces=self.rsa.get(),
+            split_aces_logic=self.split_aces_logic.get(),
             surrender=self.surrender.get(),
             bet_amount=float(self.bet.get()),
             num_decks=self.decks.get(),
@@ -121,82 +212,19 @@ class SimulatorGUI:
             test_mode=self.test_mode.get(),
         )
 
-    def _update_rules_text(self, settings: SimulationSettings):
-        payout_text = "3-2" if settings.blackjack_payout == 1.5 else "6-5"
-        dealer_logic = "H17" if settings.hit_soft_17 else "S17"
-        das_text = "Yes" if settings.double_after_split else "No"
-        rsa_text = "Yes" if settings.resplit_aces else "No"
-        surrender_text = settings.surrender.capitalize()
-        text = (
-            f"# of Decks: {settings.num_decks} | Pen.: {settings.penetration:.2f} | "
-            f"Payout: {payout_text} | Dealer 17 Logic: {dealer_logic} | "
-            f"DAS: {das_text} | RSA: {rsa_text} | Surrender: {surrender_text}"
-        )
-        self.rules_label.configure(text=text)
-
     def open_settings(self):
         if hasattr(self, "settings_win") and self.settings_win.winfo_exists():
             self.settings_win.lift()
             return
         self.settings_win = tk.Toplevel(self.root)
-        self.settings_win.title("Settings")
-        frame = tk.Frame(self.settings_win)
-        frame.pack(padx=10, pady=10)
+        self.settings_win.title("Seed")
+        frame = ttk.Frame(self.settings_win, padding=10)
+        frame.pack(fill=tk.BOTH, expand=True)
 
-        row = 0
-        tk.Label(frame, text="Bankroll").grid(row=row, column=0, sticky="e")
-        tk.Entry(frame, textvariable=self.bankroll).grid(row=row, column=1)
-        tk.Label(frame, text="Trials").grid(row=row, column=2, sticky="e")
-        tk.Entry(frame, textvariable=self.trials).grid(row=row, column=3)
-        row += 1
-        tk.Label(frame, text="Strategy").grid(row=row, column=0, sticky="e")
-        ttk.Entry(frame, textvariable=self.strategy_file).grid(row=row, column=1, columnspan=3, sticky="we")
-        row += 1
-        tk.Label(frame, text="Database").grid(row=row, column=0, sticky="e")
-        ttk.Entry(frame, textvariable=self.database).grid(row=row, column=1, columnspan=3, sticky="we")
-        row += 1
-        tk.Label(frame, text="Seed").grid(row=row, column=0, sticky="e")
-        ttk.Entry(frame, textvariable=self.seed).grid(row=row, column=1, columnspan=3, sticky="we")
-        row += 1
-
-        ttk.Separator(frame, orient="horizontal").grid(row=row, column=0, columnspan=4, sticky="ew", pady=5)
-        row += 1
-
-        tk.Label(frame, text="Rounds/Trial").grid(row=row, column=0, sticky="e")
-        tk.Spinbox(frame, from_=1, to=100, textvariable=self.rounds_per_trial, width=5).grid(row=row, column=1)
-        tk.Label(frame, text="Hands/Round").grid(row=row, column=2, sticky="e")
-        tk.Spinbox(frame, from_=1, to=100, textvariable=self.hands_per_round, width=5).grid(row=row, column=3)
-        row += 1
-        tk.Label(frame, text="Decks").grid(row=row, column=0, sticky="e")
-        tk.Spinbox(frame, from_=1, to=12, textvariable=self.decks, width=5).grid(row=row, column=1)
-        tk.Label(frame, text="Penetration").grid(row=row, column=2, sticky="e")
-        tk.Spinbox(frame, from_=0.25, to=0.95, increment=0.01, textvariable=self.penetration, width=5).grid(row=row, column=3)
-        row += 1
-        tk.Label(frame, text="Payout").grid(row=row, column=0, sticky="e")
-        ttk.Combobox(frame, textvariable=self.payout, values=["3:2", "6:5"], state="readonly").grid(row=row, column=1)
-        tk.Label(frame, text="Dealer").grid(row=row, column=2, sticky="e")
-        ttk.Combobox(frame, textvariable=self.dealer, values=["H17", "S17"], state="readonly").grid(row=row, column=3)
-        row += 1
-
-        ttk.Separator(frame, orient="horizontal").grid(row=row, column=0, columnspan=4, sticky="ew", pady=5)
-        row += 1
-
-        tk.Checkbutton(frame, text="DAS", variable=self.das).grid(row=row, column=0, sticky="w")
-        tk.Checkbutton(frame, text="RSA", variable=self.rsa).grid(row=row, column=1, sticky="w")
-        tk.Label(frame, text="Surrender").grid(row=row, column=2, sticky="e")
-        ttk.Combobox(
-            frame,
-            textvariable=self.surrender,
-            values=["Early", "Late", "None"],
-            state="readonly",
-            width=8,
-        ).grid(row=row, column=3, sticky="w")
-        row += 1
-        tk.Checkbutton(frame, text="Test Mode", variable=self.test_mode).grid(row=row, column=0, sticky="w")
-        row += 1
-
-        tk.Button(frame, text="Close", command=self.settings_win.destroy).grid(
-            row=row, column=0, columnspan=4, pady=(10, 0)
+        ttk.Label(frame, text="Seed").grid(row=0, column=0, sticky="e", padx=(0, 6))
+        ttk.Entry(frame, textvariable=self.seed, width=20).grid(row=0, column=1, sticky="w")
+        ttk.Button(frame, text="Close", command=self.settings_win.destroy).grid(
+            row=1, column=0, columnspan=2, pady=(10, 0)
         )
 
     def run_simulation(self):
@@ -207,7 +235,6 @@ class SimulatorGUI:
         self.sim.run()
         self.plot_trial_spin.config(to=self.trials.get())
         self.plot_trial.set(1)
-        self._update_rules_text(settings)
         self.update_graph()
         self.update_table()
         if not self.sim.results_available:
@@ -276,6 +303,7 @@ class SimulatorGUI:
                 wager,
                 open_bankroll,
                 close_bankroll,
+                split_aces_logic,
                 player_cards,
                 dealer_cards
             FROM temp_results
@@ -295,6 +323,7 @@ class SimulatorGUI:
             "wager": "WAGER",
             "open_bankroll": "OPEN BANKROLL",
             "close_bankroll": "CLOSE BANKROLL",
+            "split_aces_logic": "SPLIT ACES LOGIC",
             "player_cards": "PLAYER HAND",
             "dealer_cards": "DEALER HAND",
         }

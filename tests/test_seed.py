@@ -12,7 +12,7 @@ def test_simulator_seed_reproducible(tmp_path):
         bankroll=10,
         blackjack_payout=1.5,
         double_after_split=True,
-        resplit_aces=False,
+        split_aces_logic="Single",
         bet_amount=1.0,
         num_decks=1,
         hit_soft_17=False,
