@@ -1,5 +1,4 @@
 import argparse
-import os
 import sys
 from pathlib import Path
 from tkinter import TclError
@@ -95,20 +94,26 @@ def run_cli():
     sim.close()
 
 
-def main():
+def _warn_cli_args():
     if len(sys.argv) > 1:
-        run_cli()
-        return
+        print(
+            "Command line arguments are ignored; the Blackjack simulator now runs with the GUI only.",
+            file=sys.stderr,
+        )
 
-    if not os.environ.get("DISPLAY"):
-        run_cli()
-        return
 
+def main():
+    _warn_cli_args()
     try:
         run_gui()
-    except TclError:
-        print("GUI not available. Falling back to CLI.")
-        run_cli()
+    except TclError as exc:
+        print(
+            "The GUI could not be started. This application requires the graphical interface to run.\n"
+            "Details: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
