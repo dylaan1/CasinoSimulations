@@ -11,7 +11,7 @@ from .simulator import Simulator
 class SimulatorGUI:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Blackjack Simulator")
+        self.root.title("CasinoSimulations™ Blackjack")
         self.root.update_idletasks()
         try:
             self.root.state("zoomed")
