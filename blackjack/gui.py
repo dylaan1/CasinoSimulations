@@ -434,12 +434,11 @@ class SimulatorGUI:
         ymin = min(df["pl"].min(), -self.bankroll.get())
         ymax = max(df["pl"].max(), self.bankroll.get())
 
-        color_cycle = self.ax._get_lines.prop_cycler
         for trial in sorted(selected_trials):
             trial_df = df[df["trial"] == trial]
             if trial_df.empty:
                 continue
-            color = next(color_cycle)["color"]
+            color = self.ax._get_lines.get_next_color()
             self.ax.plot(trial_df["hand"], trial_df["pl"], label=f"Trial {trial}", color=color)
             self._last_plots.append((trial, trial_df[["hand", "pl"]].reset_index(drop=True)))
 
