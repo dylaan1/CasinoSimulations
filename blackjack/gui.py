@@ -291,7 +291,18 @@ class SimulatorGUI:
             self.sim.close()
         settings = self._gather_settings()
         self.sim = Simulator(settings)
-        self.sim.run()
+        try:
+            self.sim.run()
+        except Exception as exc:  # noqa: BLE001 - surface runtime issues to the user
+            if self.sim:
+                self.sim.close()
+                self.sim = None
+            messagebox.showerror(
+                "Simulation Error",
+                "An error occurred while launching or running the simulation.\n"
+                f"Details: {exc}",
+            )
+            return
         self.available_trials = list(range(1, self.trials.get() + 1))
         self.trial_filter.set("all")
         self.update_graph()
@@ -460,8 +471,15 @@ class SimulatorGUI:
                 open_bankroll,
                 close_bankroll,
                 split_aces_logic,
+                player_hand_a,
+                player_hand_b,
+                player_hand_c,
+                player_hand_d,
                 player_cards,
-                dealer_cards
+                dealer_cards,
+                running_count,
+                true_count,
+                cards_dealt
             FROM temp_results
             ORDER BY trial, round_number, hands
             """,
@@ -480,8 +498,15 @@ class SimulatorGUI:
             "open_bankroll": "OPEN BANKROLL",
             "close_bankroll": "CLOSE BANKROLL",
             "split_aces_logic": "SPLIT ACES LOGIC",
-            "player_cards": "PLAYER HAND",
+            "player_hand_a": "PLAYER HAND A",
+            "player_hand_b": "PLAYER HAND B",
+            "player_hand_c": "PLAYER HAND C",
+            "player_hand_d": "PLAYER HAND D",
+            "player_cards": "PLAYER HANDS",
             "dealer_cards": "DEALER HAND",
+            "running_count": "RUNNING COUNT",
+            "true_count": "TRUE COUNT",
+            "cards_dealt": "CARDS DEALT",
         }
 
         self.table["columns"] = list(df.columns)
