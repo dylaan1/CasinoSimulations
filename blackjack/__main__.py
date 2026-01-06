@@ -1,5 +1,6 @@
 import argparse
 import sys
+import traceback
 from pathlib import Path
 from tkinter import TclError
 
@@ -83,8 +84,8 @@ def run_gui():
     gui.run()
 
 
-def run_cli():
-    settings = parse_args()
+def run_cli(settings: SimulationSettings | None = None):
+    settings = settings or parse_args()
     sim = Simulator(settings)
     sim.run()
     if not settings.test_mode:
@@ -94,26 +95,34 @@ def run_cli():
     sim.close()
 
 
-def _warn_cli_args():
-    if len(sys.argv) > 1:
-        print(
-            "Command line arguments are ignored; the Blackjack simulator now runs with the GUI only.",
-            file=sys.stderr,
-        )
-
-
 def main():
-    _warn_cli_args()
     try:
+        if len(sys.argv) > 1:
+            print(
+                "Launching GUI; command line arguments will be used only if GUI startup fails.",
+                file=sys.stderr,
+            )
         run_gui()
-    except TclError as exc:
+    except Exception as exc:
         print(
-            "The GUI could not be started. This application requires the graphical interface to run.\n"
-            "Details: "
-            f"{exc}",
+            "An error occurred while launching the GUI. Attempting to fall back to CLI execution.\n"
+            f"Details: {exc}",
             file=sys.stderr,
         )
-        sys.exit(1)
+        traceback.print_exc()
+        try:
+            cli_settings = parse_args()
+        except SystemExit:
+            # argparse has already printed an error message
+            return
+        except Exception as parse_exc:
+            print(
+                "Failed to parse CLI arguments after GUI launch error.\n"
+                f"Details: {parse_exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        run_cli(cli_settings)
 
 
 if __name__ == "__main__":

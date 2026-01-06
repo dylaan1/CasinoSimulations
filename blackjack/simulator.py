@@ -83,8 +83,15 @@ class Simulator:
                 wager REAL,
                 open_bankroll REAL,
                 close_bankroll REAL,
+                player_hand_a TEXT,
+                player_hand_b TEXT,
+                player_hand_c TEXT,
+                player_hand_d TEXT,
                 player_cards TEXT,
-                dealer_cards TEXT
+                dealer_cards TEXT,
+                running_count INTEGER,
+                true_count REAL,
+                cards_dealt INTEGER
             )
             """
         )
@@ -106,8 +113,15 @@ class Simulator:
                 wager REAL,
                 open_bankroll REAL,
                 close_bankroll REAL,
+                player_hand_a TEXT,
+                player_hand_b TEXT,
+                player_hand_c TEXT,
+                player_hand_d TEXT,
                 player_cards TEXT,
-                dealer_cards TEXT
+                dealer_cards TEXT,
+                running_count INTEGER,
+                true_count REAL,
+                cards_dealt INTEGER
             )
             """
         )
@@ -115,6 +129,13 @@ class Simulator:
         for table in ("results", "temp_results"):
             self._ensure_column(table, "round_number", "INTEGER")
             self._ensure_column(table, "split_aces_logic", "TEXT")
+            self._ensure_column(table, "player_hand_a", "TEXT")
+            self._ensure_column(table, "player_hand_b", "TEXT")
+            self._ensure_column(table, "player_hand_c", "TEXT")
+            self._ensure_column(table, "player_hand_d", "TEXT")
+            self._ensure_column(table, "running_count", "INTEGER")
+            self._ensure_column(table, "true_count", "REAL")
+            self._ensure_column(table, "cards_dealt", "INTEGER")
 
         self.conn.commit()
 
@@ -150,18 +171,13 @@ class Simulator:
             if hand.is_bust:
                 return f"{cards} | {hand.best_value} (Bust)"
             status = "Stand"
-            tags = []
             if hand.bet > self.settings.bet_amount:
-                tags.append("Double")
-            if hand.is_split_aces:
-                tags.append("Split Aces")
-            elif hand.is_split:
-                tags.append("Split")
-            if tags:
-                status = f"{status}, {'/'.join(tags)}"
+                status = f"{status} (Doubled)"
             return f"{cards} | {hand.best_value} ({status})"
 
         player_entries = [describe(hand) for hand in player_hands]
+        while len(player_entries) < 4:
+            player_entries.append("")
         dealer_text = describe(dealer_hand)
         return player_entries, dealer_text
 
@@ -230,7 +246,11 @@ class Simulator:
                     player_entries, dealer_text = self._format_round(
                         player_hands, dealer_hand
                     )
-                    for hand, player_text in zip(player_hands, player_entries):
+                    player_cards_text = " | ".join(p for p in player_entries if p)
+                    running_count = shoe.running_count
+                    true_count = shoe.true_count
+                    cards_dealt = shoe.cards_dealt
+                    for hand in player_hands:
                         hand_counter += 1
                         hands_played += 1
                         total_hands += 1
@@ -259,9 +279,16 @@ class Simulator:
                                 wager,
                                 open_bankroll,
                                 close_bankroll,
+                                player_hand_a,
+                                player_hand_b,
+                                player_hand_c,
+                                player_hand_d,
                                 player_cards,
-                                dealer_cards
-                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                dealer_cards,
+                                running_count,
+                                true_count,
+                                cards_dealt
+                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                             """,
                             (
                                 self.sim_number,
@@ -285,8 +312,15 @@ class Simulator:
                                 hand.bet,
                                 hand_open_bankroll,
                                 player_settings.bankroll,
-                                player_text,
+                                player_entries[0],
+                                player_entries[1],
+                                player_entries[2],
+                                player_entries[3],
+                                player_cards_text,
                                 dealer_text,
+                                running_count,
+                                true_count,
+                                cards_dealt,
                             ),
                         )
                 if stop_play:
