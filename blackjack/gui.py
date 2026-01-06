@@ -230,8 +230,17 @@ class SimulatorGUI:
         )
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
-        frame = ttk.Frame(parent)
-        canvas = tk.Canvas(frame, width=48, height=26, highlightthickness=0, bg=frame.cget("background"))
+        base_bg = parent.winfo_toplevel().cget("bg")
+        frame = tk.Frame(parent, bg=base_bg, highlightthickness=0, bd=0)
+        canvas = tk.Canvas(
+            frame,
+            width=48,
+            height=26,
+            highlightthickness=0,
+            bg=base_bg,
+            bd=0,
+            relief=tk.FLAT,
+        )
         canvas.pack()
 
         def redraw(*_):
