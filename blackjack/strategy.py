@@ -47,11 +47,11 @@ class BasicStrategy:
                             row[dealer] = "hit"
         return cls(hard=hard, soft=soft, pair=pair)
 
-    def _lookup(self, table: Dict, key, dealer_up: str) -> Action | None:
+    def _lookup(self, table: Dict, key, dealer_up: str, table_name: str) -> Action:
         row = table.get(key)
-        if row:
-            return row.get(dealer_up)
-        return None
+        if not row or dealer_up not in row:
+            return "hit"
+        return row[dealer_up]
 
     def decide(self, hand: Hand, dealer_up: str, options: Dict[str, bool]) -> Action:
         """Return the recommended action for *hand* against *dealer_up*.
@@ -62,14 +62,14 @@ class BasicStrategy:
         # Check for pair/split actions first
         if options.get("can_split") and hand.can_split:
             rank = hand.cards[0].rank
-            action = self._lookup(self.pair, rank, dealer_up)
+            action = self._lookup(self.pair, rank, dealer_up, "pair")
             if action == "split":
                 return "split"
 
         total = hand.best_value
         soft = any(v <= 21 and v != total for v in hand.values)
         table = self.soft if soft else self.hard
-        action = self._lookup(table, total, dealer_up)
+        action = self._lookup(table, total, dealer_up, "soft" if soft else "hard")
 
         # Fallback when action requires an unavailable option
         if action == "double" and not options.get("can_double"):
@@ -77,4 +77,4 @@ class BasicStrategy:
         if action == "surrender" and not options.get("can_surrender"):
             action = "hit"
 
-        return action or "stand"
+        return action
