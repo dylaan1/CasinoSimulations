@@ -79,8 +79,8 @@ class SimulatorGUI:
         self.canvas.get_tk_widget().pack(in_=chart_frame, fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("motion_notify_event", self._on_hover)
 
-        chart_footer = tk.Frame(self.top_panel, padx=10, pady=(0, 6))
-        chart_footer.grid(row=3, column=0, sticky="ew")
+        chart_footer = tk.Frame(self.top_panel, padx=10)
+        chart_footer.grid(row=3, column=0, sticky="ew", pady=(0, 6))
         chart_footer.columnconfigure(0, weight=1)
         self.view_data_btn = ttk.Button(
             chart_footer,
