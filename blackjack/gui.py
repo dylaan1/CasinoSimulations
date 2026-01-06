@@ -37,6 +37,7 @@ class SimulatorGUI:
         self.das = tk.BooleanVar()
         self.split_aces_logic = tk.StringVar(value="Single")
         self.surrender = tk.StringVar(value="Late")
+        self.das_switch_text = tk.StringVar()
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
         self.penetration = tk.DoubleVar(value=0.75)
@@ -93,67 +94,18 @@ class SimulatorGUI:
         section_font = base_font.copy()
         section_font.configure(size=max(section_font["size"] - 2, 9), weight="bold")
 
-        payout_combo = ttk.Combobox(
-            self.settings_bar, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=4
-        )
-        dealer_combo = ttk.Combobox(
-            self.settings_bar, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=4
-        )
-
-        self.das_switch_text = tk.StringVar()
         self._update_das_switch_label()
-        das_toggle = self._build_switch(self.settings_bar, self.das)
 
-        split_aces_combo = ttk.Combobox(
-            self.settings_bar,
-            textvariable=self.split_aces_logic,
-            values=["Single", "Carnival"],
-            state="readonly",
-            width=8,
-        )
-
-        surrender_combo = ttk.Combobox(
-            self.settings_bar,
-            textvariable=self.surrender,
-            values=["Early", "Late", "None"],
-            state="readonly",
-            width=7,
-        )
-
-        test_mode_toggle = self._build_switch(self.settings_bar, self.test_mode)
-
-        strategy_combo = ttk.Combobox(
-            self.settings_bar,
-            textvariable=self.strategy_file,
-            values=[self.strategy_file.get()],
-            state="readonly",
-            width=max(18, len(self.strategy_file.get())),
-        )
-        database_combo = ttk.Combobox(
-            self.settings_bar,
-            textvariable=self.database,
-            values=[self.database.get()],
-            state="readonly",
-            width=max(18, len(self.database.get())),
-        )
-
-        bankroll_entry = ttk.Entry(self.settings_bar, textvariable=self.bankroll, width=12)
-        trials_spin = tk.Spinbox(self.settings_bar, from_=1, to=1000, textvariable=self.trials, width=6)
-        rounds_spin = tk.Spinbox(self.settings_bar, from_=1, to=100, textvariable=self.rounds_per_trial, width=6)
-        hands_spin = tk.Spinbox(self.settings_bar, from_=1, to=100, textvariable=self.hands_per_round, width=6)
-        bet_entry = ttk.Entry(self.settings_bar, textvariable=self.bet, width=12)
-        decks_spin = tk.Spinbox(self.settings_bar, from_=1, to=12, textvariable=self.decks, width=6)
-        pen_spin = tk.Spinbox(self.settings_bar, from_=0.25, to=0.95, increment=0.01, textvariable=self.penetration, width=6)
-
-        def build_bin(parent: tk.Widget, label: str, control: tk.Widget) -> ttk.Frame:
+        def build_bin(parent: tk.Widget, label: str, control_factory) -> ttk.Frame:
             frame = ttk.Frame(parent, padding=(6, 2))
             ttk.Label(frame, text=label, font=label_font, anchor="center").pack(
                 side=tk.TOP, fill=tk.X
             )
+            control = control_factory(frame)
             control.pack(side=tk.TOP, pady=(4, 2))
             return frame
 
-        def add_row(title: str, bins: list[ttk.Frame]):
+        def add_row(title: str, bin_specs: list[tuple[str, callable]]):
             row_frame = ttk.Frame(self.settings_bar)
             row_frame.pack(fill=tk.X, pady=(2, 6))
             ttk.Label(row_frame, text=title, font=section_font).grid(
@@ -161,40 +113,104 @@ class SimulatorGUI:
             )
             bins_frame = ttk.Frame(row_frame)
             bins_frame.grid(row=1, column=0, sticky="ew")
-            for col in range(len(bins) * 2 - 1):
+            for col in range(len(bin_specs) * 2 - 1):
                 bins_frame.columnconfigure(col, weight=1)
 
-            for idx, bin_frame in enumerate(bins):
+            for idx, (label, factory) in enumerate(bin_specs):
+                bin_frame = build_bin(bins_frame, label, factory)
                 bin_frame.grid(row=0, column=idx * 2, sticky="nsew", padx=6)
-                if idx < len(bins) - 1:
+                if idx < len(bin_specs) - 1:
                     ttk.Separator(bins_frame, orient="vertical").grid(
                         row=0, column=idx * 2 + 1, sticky="ns", padx=4, pady=4
                     )
 
         sim_bins = [
-            build_bin(self.settings_bar, "Bankroll", bankroll_entry),
-            build_bin(self.settings_bar, "Bet", bet_entry),
-        ]
-        sim_bins += [
-            build_bin(self.settings_bar, "Trials", trials_spin),
-            build_bin(self.settings_bar, "Rounds/Trial", rounds_spin),
-            build_bin(self.settings_bar, "Hands/Round", hands_spin),
-            build_bin(self.settings_bar, "Decks", decks_spin),
-            build_bin(self.settings_bar, "Penetration", pen_spin),
+            ("Bankroll", lambda parent: ttk.Entry(parent, textvariable=self.bankroll, width=12)),
+            ("Bet", lambda parent: ttk.Entry(parent, textvariable=self.bet, width=12)),
+            ("Trials", lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.trials, width=6)),
+            (
+                "Rounds/Trial",
+                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.rounds_per_trial, width=6),
+            ),
+            (
+                "Hands/Round",
+                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.hands_per_round, width=6),
+            ),
+            ("Decks", lambda parent: tk.Spinbox(parent, from_=1, to=12, textvariable=self.decks, width=6)),
+            (
+                "Penetration",
+                lambda parent: tk.Spinbox(
+                    parent,
+                    from_=0.25,
+                    to=0.95,
+                    increment=0.01,
+                    textvariable=self.penetration,
+                    width=6,
+                ),
+            ),
         ]
 
         rules_bins = [
-            build_bin(self.settings_bar, "Payout", payout_combo),
-            build_bin(self.settings_bar, "Dealer 17 Logic", dealer_combo),
-            build_bin(self.settings_bar, "Double After Split", das_toggle),
-            build_bin(self.settings_bar, "Split Aces Logic", split_aces_combo),
-            build_bin(self.settings_bar, "Surrender", surrender_combo),
+            (
+                "Payout",
+                lambda parent: ttk.Combobox(
+                    parent, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=4
+                ),
+            ),
+            (
+                "Dealer 17 Logic",
+                lambda parent: ttk.Combobox(
+                    parent, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=4
+                ),
+            ),
+            (
+                "Double After Split",
+                lambda parent: self._build_switch(parent, self.das),
+            ),
+            (
+                "Split Aces Logic",
+                lambda parent: ttk.Combobox(
+                    parent,
+                    textvariable=self.split_aces_logic,
+                    values=["Single", "Carnival"],
+                    state="readonly",
+                    width=8,
+                ),
+            ),
+            (
+                "Surrender",
+                lambda parent: ttk.Combobox(
+                    parent,
+                    textvariable=self.surrender,
+                    values=["Early", "Late", "None"],
+                    state="readonly",
+                    width=7,
+                ),
+            ),
         ]
 
         data_bins = [
-            build_bin(self.settings_bar, "Strategy", strategy_combo),
-            build_bin(self.settings_bar, "Database", database_combo),
-            build_bin(self.settings_bar, "Test Mode", test_mode_toggle),
+            (
+                "Strategy",
+                lambda parent: ttk.Combobox(
+                    parent,
+                    textvariable=self.strategy_file,
+                    values=[self.strategy_file.get()],
+                    state="readonly",
+                    width=max(18, len(self.strategy_file.get())),
+                ),
+            ),
+            (
+                "Database",
+                lambda parent: ttk.Combobox(
+                    parent,
+                    textvariable=self.database,
+                    values=[self.database.get()],
+                    state="readonly",
+                    width=max(18, len(self.database.get())),
+                ),
+            ),
+            ("Test Mode", lambda parent: self._build_switch(parent, self.test_mode)),
         ]
 
         add_row("SIMULATION SETTINGS", sim_bins)
