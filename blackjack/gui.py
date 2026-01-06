@@ -4,6 +4,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import pandas as pd
 
+from .gui_data import DataWindow
 from .settings import SimulationSettings
 from .simulator import Simulator
 
@@ -19,11 +20,16 @@ class SimulatorGUI:
             width = self.root.winfo_screenwidth()
             height = self.root.winfo_screenheight()
             self.root.geometry(f"{width}x{height}")
+        self.root.rowconfigure(0, weight=3)
+        self.root.rowconfigure(1, weight=2)
+        self.root.columnconfigure(0, weight=1)
         self.sim = None
         self.available_trials: list[int] = []
 
         self.hover_annotation = None
         self._last_plots: list[tuple[int, pd.DataFrame]] = []
+        self.results_df = pd.DataFrame()
+        self.data_window: DataWindow | None = None
 
         # simulation setting variables
         self.bankroll = tk.DoubleVar(value=1000)
@@ -52,40 +58,59 @@ class SimulatorGUI:
         self._update_test_mode_label()
 
     def _build_widgets(self):
+        self.top_panel = tk.Frame(self.root)
+        self.top_panel.grid(row=0, column=0, sticky="nsew")
+        self.top_panel.rowconfigure(2, weight=1)
+        self.top_panel.columnconfigure(0, weight=1)
+
         fig = Figure(figsize=(6, 4))
         self.ax = fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(fig, master=self.root)
+        self.canvas = FigureCanvasTkAgg(fig, master=self.top_panel)
         self.test_mode_label = tk.Label(
-            self.root, text="The Simulator is currently in 'Test Mode'", fg="red"
+            self.top_panel, text="The Simulator is currently in 'Test Mode'", fg="red"
         )
-        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
+        self._build_chart_controls(self.top_panel)
+
+        chart_frame = tk.Frame(self.top_panel, padx=10, pady=6)
+        chart_frame.grid(row=2, column=0, sticky="nsew")
+        chart_frame.rowconfigure(0, weight=1)
+        chart_frame.columnconfigure(0, weight=1)
+        self.canvas.get_tk_widget().pack(in_=chart_frame, fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("motion_notify_event", self._on_hover)
 
-        self._build_chart_controls()
+        chart_footer = tk.Frame(self.top_panel, padx=10, pady=(0, 6))
+        chart_footer.grid(row=3, column=0, sticky="ew")
+        chart_footer.columnconfigure(0, weight=1)
+        self.view_data_btn = ttk.Button(
+            chart_footer,
+            text="View Data",
+            command=self.open_data_window,
+            state=tk.DISABLED,
+        )
+        self.view_data_btn.grid(row=0, column=1, sticky="e")
 
-        self.table_frame = tk.Frame(self.root)
-        self.table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        self.table = ttk.Treeview(self.table_frame, show="headings")
-        self.table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scroll = ttk.Scrollbar(self.table_frame, orient="vertical", command=self.table.yview)
-        self.table.configure(yscrollcommand=scroll.set)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.bottom_panel = tk.Frame(self.root, padx=10, pady=10)
+        self.bottom_panel.grid(row=1, column=0, sticky="nsew")
+        self.bottom_panel.rowconfigure(0, weight=1)
+        self.bottom_panel.columnconfigure(0, weight=1)
 
-        self.settings_bar = ttk.Frame(self.root, padding=(10, 6))
+        self.settings_bar = ttk.Frame(self.bottom_panel, padding=(10, 6))
         self._build_settings_bar()
-        self.settings_bar.pack(fill=tk.X, pady=(0, 8))
+        self.settings_bar.pack(anchor="center", pady=(0, 8))
 
-        controls = tk.Frame(self.root)
-        controls.pack(side=tk.BOTTOM, fill=tk.X)
-
-        tk.Button(controls, text="Run", command=self.run_simulation).pack(side=tk.LEFT)
-        self.save_btn = tk.Button(controls, text="Save", command=self.save_results, state=tk.DISABLED)
-        self.save_btn.pack(side=tk.LEFT)
-        self.discard_btn = tk.Button(controls, text="Discard", command=self.discard_results, state=tk.DISABLED)
-        self.discard_btn.pack(side=tk.LEFT)
-        tk.Button(controls, text="Exit", command=self.exit_prompt).pack(side=tk.RIGHT)
-        tk.Button(controls, text="Seed", command=self.open_settings).pack(side=tk.RIGHT)
+        footer = tk.Frame(self.bottom_panel)
+        footer.pack(fill=tk.X)
+        ttk.Button(footer, text="Seed", command=self.open_settings).pack(side=tk.LEFT)
+        tk.Button(
+            footer,
+            text="Exit",
+            command=self.exit_prompt,
+            bg="red",
+            fg="white",
+            activebackground="red",
+            activeforeground="white",
+        ).pack(side=tk.RIGHT)
 
     def _build_settings_bar(self):
         base_font = tkfont.nametofont("TkDefaultFont")
@@ -107,7 +132,7 @@ class SimulatorGUI:
 
         def add_row(title: str, bin_specs: list[tuple[str, callable]]):
             row_frame = ttk.Frame(self.settings_bar)
-            row_frame.pack(fill=tk.X, pady=(2, 6))
+            row_frame.pack(anchor="center", pady=(2, 6))
             ttk.Label(row_frame, text=title, font=section_font).grid(
                 row=0, column=0, sticky="nw", padx=(0, 12)
             )
@@ -222,28 +247,49 @@ class SimulatorGUI:
 
     def _update_test_mode_label(self):
         if self.test_mode.get():
-            self.test_mode_label.pack(
-                side=tk.TOP, fill=tk.X, before=self.canvas.get_tk_widget()
+            self.test_mode_label.grid(
+                row=0,
+                column=0,
+                sticky="ew",
+                in_=self.top_panel,
+                pady=(4, 0),
+                padx=10,
             )
         else:
-            self.test_mode_label.pack_forget()
+            self.test_mode_label.grid_forget()
 
-    def _build_chart_controls(self):
-        controls = ttk.Frame(self.root, padding=(10, 4))
-        controls.pack(fill=tk.X)
-        ttk.Label(controls, text="TRIAL VIEW", font=(None, 9, "bold")).pack(
-            side=tk.LEFT, padx=(0, 8)
+    def _build_chart_controls(self, parent: tk.Widget):
+        controls = ttk.Frame(parent, padding=(10, 4))
+        controls.grid(row=1, column=0, sticky="ew")
+        for idx in range(8):
+            controls.columnconfigure(idx, weight=0)
+        controls.columnconfigure(2, weight=1)
+
+        ttk.Label(controls, text="TRIAL VIEW", font=(None, 9, "bold")).grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
         )
-        ttk.Label(controls, text="Enter 'all' or a list/range (e.g. 1,3-5):").pack(
-            side=tk.LEFT
-        )
+        ttk.Label(
+            controls, text="Enter 'all' or a list/range (e.g. 1,3-5):"
+        ).grid(row=0, column=1, sticky="w")
         entry = ttk.Entry(controls, textvariable=self.trial_filter, width=20)
-        entry.pack(side=tk.LEFT, padx=(6, 6))
+        entry.grid(row=0, column=2, sticky="w", padx=(6, 6))
         entry.bind("<Return>", lambda event: self.update_graph())
-        ttk.Button(controls, text="Apply", command=self.update_graph).pack(side=tk.LEFT)
-        ttk.Button(controls, text="Show All", command=self._show_all_trials).pack(
-            side=tk.LEFT, padx=(6, 0)
+        ttk.Button(controls, text="Apply", command=self.update_graph).grid(
+            row=0, column=3, padx=(0, 6)
         )
+        ttk.Button(controls, text="Show All", command=self._show_all_trials).grid(
+            row=0, column=4, padx=(0, 12)
+        )
+        self.run_btn = ttk.Button(controls, text="Run", command=self.run_simulation)
+        self.run_btn.grid(row=0, column=5, padx=(0, 6))
+        self.save_btn = ttk.Button(
+            controls, text="Save", command=self.save_results, state=tk.DISABLED
+        )
+        self.save_btn.grid(row=0, column=6, padx=(0, 6))
+        self.discard_btn = ttk.Button(
+            controls, text="Discard", command=self.discard_results, state=tk.DISABLED
+        )
+        self.discard_btn.grid(row=0, column=7)
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
         base_bg = parent.winfo_toplevel().cget("bg")
@@ -375,8 +421,9 @@ class SimulatorGUI:
         df["pl"] = df["bankroll"] - self.bankroll.get()
 
         self.ax.clear()
-        self.ax.set_xlabel("Total Hands Played")
-        self.ax.set_ylabel("P/L")
+        self.ax.set_xlabel("# of Hands Played")
+        self.ax.set_ylabel("P/L ($)")
+        self.ax.set_title("Total Profit/Loss", fontname="Verdana", fontsize=18, fontweight="bold")
         self.ax.axhline(0, color="gray", linewidth=0.5)
         self.ax.grid(True, axis="x", color="#a05f5f", alpha=0.25)
         self.ax.grid(True, axis="y", color="#5f748c", alpha=0.25)
@@ -401,6 +448,29 @@ class SimulatorGUI:
         if len(selected_trials) > 1:
             self.ax.legend()
 
+        summary_trial = max(selected_trials)
+        summary_df = df[df["trial"] == summary_trial]
+        if not summary_df.empty:
+            hands_played = int(summary_df["hand"].max())
+            ending_bankroll = float(summary_df["bankroll"].iloc[-1])
+            final_pl = float(summary_df["pl"].iloc[-1])
+            summary_text = (
+                f"Trial: {summary_trial}\n"
+                f"Hands Played: {hands_played}\n"
+                f"Ending Bankroll: ${ending_bankroll:,.2f}\n"
+                f"Final P/L: ${final_pl:,.2f}"
+            )
+            self.ax.text(
+                0.02,
+                0.98,
+                summary_text,
+                transform=self.ax.transAxes,
+                fontsize=12,
+                fontfamily="Verdana",
+                verticalalignment="top",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.85),
+            )
+
         self.canvas.draw()
 
     def _clear_plot(self):
@@ -411,8 +481,21 @@ class SimulatorGUI:
         self.canvas.draw()
 
     def _clear_table(self):
-        self.table.delete(*self.table.get_children())
-        self.table["columns"] = []
+        self.results_df = pd.DataFrame()
+        self.view_data_btn.state(["disabled"])
+        if self.data_window and self.data_window.is_open():
+            self.data_window.close()
+
+    def open_data_window(self):
+        if self.results_df.empty:
+            return
+        if self.data_window and self.data_window.is_open():
+            self.data_window.update_dataframe(self.results_df)
+            self.data_window.win.lift()
+            return
+        self.data_window = DataWindow(
+            self.root, self.results_df, on_close=lambda: setattr(self, "data_window", None)
+        )
 
     def _parse_trial_selection(self) -> list[int]:
         raw = self.trial_filter.get().strip().lower()
@@ -502,50 +585,41 @@ class SimulatorGUI:
                 player_hand_d,
                 player_cards,
                 dealer_cards,
+                cards_dealt,
                 running_count,
-                true_count,
-                cards_dealt
+                true_count
             FROM temp_results
             ORDER BY trial, round_number, hands
             """,
             self.sim.conn,
         )
-        self.table.delete(*self.table.get_children())
+
         if df.empty:
-            self.table["columns"] = []
+            self._clear_table()
             return
 
-        display_names = {
-            "trial": "TRIAL #",
-            "round_number": "ROUND #",
-            "hands": "HAND #",
-            "wager": "WAGER",
-            "open_bankroll": "OPEN BANKROLL",
-            "close_bankroll": "CLOSE BANKROLL",
-            "split_aces_logic": "SPLIT ACES LOGIC",
-            "player_hand_a": "PLAYER HAND A",
-            "player_hand_b": "PLAYER HAND B",
-            "player_hand_c": "PLAYER HAND C",
-            "player_hand_d": "PLAYER HAND D",
-            "player_cards": "PLAYER HANDS",
-            "dealer_cards": "DEALER HAND",
-            "running_count": "RUNNING COUNT",
-            "true_count": "TRUE COUNT",
-            "cards_dealt": "CARDS DEALT",
-        }
-
-        self.table["columns"] = list(df.columns)
-        font = tkfont.nametofont("TkDefaultFont")
-        for col in df.columns:
-            header_text = display_names.get(col, col.upper())
-            values = [header_text] + [str(v) for v in df[col].tolist()]
-            width = max(font.measure(v) for v in values) + 12
-            self.table.heading(col, text=header_text)
-            self.table.column(col, width=width, stretch=True, anchor=tk.W)
-
-        for _, row in df.iterrows():
-            self.table.insert("", tk.END, values=[row[col] for col in df.columns])
-        self.table.update_idletasks()
+        ordered_cols = [
+            "trial",
+            "round_number",
+            "hands",
+            "wager",
+            "open_bankroll",
+            "close_bankroll",
+            "split_aces_logic",
+            "player_hand_a",
+            "player_hand_b",
+            "player_hand_c",
+            "player_hand_d",
+            "player_cards",
+            "dealer_cards",
+            "cards_dealt",
+            "running_count",
+            "true_count",
+        ]
+        self.results_df = df[ordered_cols]
+        self.view_data_btn.state(["!disabled"])
+        if self.data_window and self.data_window.is_open():
+            self.data_window.update_dataframe(self.results_df)
 
     def save_results(self):
         if self.sim:
