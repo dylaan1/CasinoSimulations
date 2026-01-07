@@ -36,8 +36,7 @@ _bootstrap_imports()
 
 def parse_args() -> SimulationSettings:
     parser = argparse.ArgumentParser(description="Blackjack simulator")
-    parser.add_argument("--trials", type=int, default=100)
-    parser.add_argument("--rounds-per-trial", type=int, default=1)
+    parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--hands-per-round", type=int, default=100)
     parser.add_argument("--bankroll", type=float, default=1000.0)
     parser.add_argument("--payout", type=float, default=1.5)
@@ -54,14 +53,12 @@ def parse_args() -> SimulationSettings:
     parser.add_argument("--penetration", type=float, default=0.75)
     parser.add_argument("--strategy", type=str, default=str(DEFAULT_STRATEGY_FILE))
     parser.add_argument("--database", type=str, default="simulation.db")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--test-mode", action="store_true", help="Run without persisting results")
     args = parser.parse_args()
     if not Path(args.strategy).is_file():
         parser.error(f"Strategy file '{args.strategy}' not found.")
     settings = SimulationSettings(
-        trials=args.trials,
-        rounds_per_trial=args.rounds_per_trial,
+        rounds=args.rounds,
         hands_per_round=args.hands_per_round,
         bankroll=args.bankroll,
         blackjack_payout=args.payout,
@@ -73,7 +70,6 @@ def parse_args() -> SimulationSettings:
         penetration=args.penetration,
         strategy_file=args.strategy,
         database=args.database,
-        seed=args.seed,
         test_mode=args.test_mode,
     )
     return settings

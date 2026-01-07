@@ -1,6 +1,8 @@
 from __future__ import annotations
 import sqlite3
 import random
+import string
+from datetime import datetime
 
 from dataclasses import asdict
 
@@ -23,6 +25,35 @@ TABLE_PAIRS = [
     ("card_distribution", "temp_card_distribution"),
     ("results", "temp_results"),
 ]
+
+TABLE_COLUMNS = {
+    "bankroll": ("round_number", "hand", "bankroll"),
+    "summary": ("round_number", "hands_played", "bankroll"),
+    "card_distribution": ("round_number", "card", "count"),
+    "results": (
+        "sim",
+        "round_number",
+        "decks",
+        "penetration",
+        "payout",
+        "soft17",
+        "das",
+        "rsa",
+        "surrender",
+        "hands",
+        "wager",
+        "open_bankroll",
+        "close_bankroll",
+        "player_hand_a",
+        "player_hand_b",
+        "player_hand_c",
+        "player_hand_d",
+        "dealer_cards",
+        "running_count",
+        "true_count",
+        "cards_dealt",
+    ),
+}
 
 
 class Simulator:
@@ -47,29 +78,64 @@ class Simulator:
         cur = self.conn.cursor()
 
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS bankroll (trial INTEGER, hand INTEGER, bankroll REAL)"
+            """
+            CREATE TABLE IF NOT EXISTS bankroll (
+                round_number INTEGER,
+                hand INTEGER,
+                bankroll REAL
+            )
+            """
         )
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS summary (trial INTEGER, hands_played INTEGER, bankroll REAL)"
+            """
+            CREATE TABLE IF NOT EXISTS summary (
+                round_number INTEGER,
+                hands_played INTEGER,
+                bankroll REAL
+            )
+            """
         )
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS card_distribution (trial INTEGER, card TEXT, count INTEGER)"
+            """
+            CREATE TABLE IF NOT EXISTS card_distribution (
+                round_number INTEGER,
+                card TEXT,
+                count INTEGER
+            )
+            """
         )
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS temp_bankroll (trial INTEGER, hand INTEGER, bankroll REAL)"
+            """
+            CREATE TABLE IF NOT EXISTS temp_bankroll (
+                round_number INTEGER,
+                hand INTEGER,
+                bankroll REAL
+            )
+            """
         )
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS temp_summary (trial INTEGER, hands_played INTEGER, bankroll REAL)"
+            """
+            CREATE TABLE IF NOT EXISTS temp_summary (
+                round_number INTEGER,
+                hands_played INTEGER,
+                bankroll REAL
+            )
+            """
         )
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS temp_card_distribution (trial INTEGER, card TEXT, count INTEGER)"
+            """
+            CREATE TABLE IF NOT EXISTS temp_card_distribution (
+                round_number INTEGER,
+                card TEXT,
+                count INTEGER
+            )
+            """
         )
 
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS results (
                 sim INTEGER,
-                trial INTEGER,
                 round_number INTEGER,
                 decks INTEGER,
                 penetration REAL,
@@ -77,7 +143,6 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
-                split_aces_logic TEXT,
                 surrender TEXT,
                 hands INTEGER,
                 wager REAL,
@@ -87,7 +152,6 @@ class Simulator:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
-                player_cards TEXT,
                 dealer_cards TEXT,
                 running_count INTEGER,
                 true_count REAL,
@@ -99,7 +163,6 @@ class Simulator:
             """
             CREATE TABLE IF NOT EXISTS temp_results (
                 sim INTEGER,
-                trial INTEGER,
                 round_number INTEGER,
                 decks INTEGER,
                 penetration REAL,
@@ -107,7 +170,6 @@ class Simulator:
                 soft17 TEXT,
                 das INTEGER,
                 rsa INTEGER,
-                split_aces_logic TEXT,
                 surrender TEXT,
                 hands INTEGER,
                 wager REAL,
@@ -117,7 +179,6 @@ class Simulator:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
-                player_cards TEXT,
                 dealer_cards TEXT,
                 running_count INTEGER,
                 true_count REAL,
@@ -128,7 +189,6 @@ class Simulator:
 
         for table in ("results", "temp_results"):
             self._ensure_column(table, "round_number", "INTEGER")
-            self._ensure_column(table, "split_aces_logic", "TEXT")
             self._ensure_column(table, "player_hand_a", "TEXT")
             self._ensure_column(table, "player_hand_b", "TEXT")
             self._ensure_column(table, "player_hand_c", "TEXT")
@@ -136,6 +196,62 @@ class Simulator:
             self._ensure_column(table, "running_count", "INTEGER")
             self._ensure_column(table, "true_count", "REAL")
             self._ensure_column(table, "cards_dealt", "INTEGER")
+            self._ensure_column(table, "dealer_cards", "TEXT")
+
+        for table in (
+            "bankroll",
+            "summary",
+            "card_distribution",
+            "temp_bankroll",
+            "temp_summary",
+            "temp_card_distribution",
+        ):
+            self._ensure_column(table, "round_number", "INTEGER")
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seeds (
+                seed_id TEXT PRIMARY KEY,
+                created_at TEXT,
+                total_rounds INTEGER,
+                total_hands INTEGER,
+                total_pl REAL,
+                starting_bankroll REAL,
+                favorite INTEGER DEFAULT 0
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seed_results (
+                seed_id TEXT,
+                round_number INTEGER,
+                hand INTEGER,
+                wager REAL,
+                open_bankroll REAL,
+                close_bankroll REAL,
+                player_hand_a TEXT,
+                player_hand_b TEXT,
+                player_hand_c TEXT,
+                player_hand_d TEXT,
+                dealer_cards TEXT,
+                cards_dealt INTEGER,
+                running_count INTEGER,
+                true_count REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seed_bankroll (
+                seed_id TEXT,
+                round_number INTEGER,
+                hand INTEGER,
+                bankroll REAL
+            )
+            """
+        )
+        self._ensure_column("saved_seeds", "favorite", "INTEGER")
 
         self.conn.commit()
 
@@ -182,14 +298,12 @@ class Simulator:
         return player_entries, dealer_text
 
     def run(self) -> None:
-        if self.settings.seed is not None:
-            random.seed(self.settings.seed)
         allow_surrender = self.settings.surrender.lower() != "none"
         strat = BasicStrategy.from_json(
             self.settings.strategy_file, allow_surrender=allow_surrender
         )
         total_hands = 0
-        for trial_number in range(1, self.settings.trials + 1):
+        for round_number in range(1, self.settings.rounds + 1):
             shoe = Shoe(self.settings.num_decks, penetration=self.settings.penetration)
             player_settings = PlayerSettings(
                 bankroll=self.settings.bankroll,
@@ -204,150 +318,148 @@ class Simulator:
             hands_played = 0
             hand_counter = 0
             cur = self.conn.cursor()
-            stop_play = False
-            for round_number in range(1, self.settings.rounds_per_trial + 1):
-                for _ in range(self.settings.hands_per_round):
-                    if player_settings.bankroll < player_settings.bet_amount:
-                        stop_play = True
-                        break
-                    if shoe.penetration_reached:
-                        shoe.shuffle()
-                    player_settings.bankroll -= player_settings.bet_amount
-                    player_hand = Hand(bet=player_settings.bet_amount)
-                    dealer_hand = Hand()
-                    player_hand.add_card(shoe.draw())
-                    dealer_hand.add_card(shoe.draw())
-                    player_hand.add_card(shoe.draw())
-                    dealer_hand.add_card(shoe.draw())
-
-                    dealer_up = dealer_hand.cards[0].rank
-                    dealer_checks_blackjack = dealer_up in {"10", "A"}
-                    dealer_has_blackjack = dealer_checks_blackjack and dealer_hand.is_blackjack
-                    surrender_setting = self.settings.surrender.lower()
-
-                    if surrender_setting == "late" and dealer_has_blackjack:
-                        player_hands = [player_hand]
-                    else:
-                        player_hands = player.play(
-                            shoe,
-                            dealer_up,
-                            player_hand,
-                            allow_surrender=allow_surrender,
-                        )
-
-                    dealer_blackjack_active = dealer_has_blackjack and any(
-                        not h.surrendered for h in player_hands
-                    )
-                    if not dealer_blackjack_active and any(
-                        not h.is_bust and not h.surrendered for h in player_hands
-                    ):
-                        dealer.play(dealer_hand, shoe)
-
-                    player_entries, dealer_text = self._format_round(
-                        player_hands, dealer_hand
-                    )
-                    player_cards_text = " | ".join(p for p in player_entries if p)
-                    running_count = shoe.running_count
-                    true_count = shoe.true_count
-                    cards_dealt = shoe.cards_dealt
-                    for hand in player_hands:
-                        hand_counter += 1
-                        hands_played += 1
-                        total_hands += 1
-                        hand_open_bankroll = player_settings.bankroll
-                        change = self.resolve_hand(hand, dealer_hand, player_settings)
-                        player_settings.bankroll += change
-                        cur.execute(
-                            "INSERT INTO temp_bankroll VALUES (?,?,?)",
-                            (trial_number, hand_counter, player_settings.bankroll),
-                        )
-                        cur.execute(
-                            """
-                            INSERT INTO temp_results (
-                                sim,
-                                trial,
-                                round_number,
-                                decks,
-                                penetration,
-                                payout,
-                                soft17,
-                                das,
-                                rsa,
-                                split_aces_logic,
-                                surrender,
-                                hands,
-                                wager,
-                                open_bankroll,
-                                close_bankroll,
-                                player_hand_a,
-                                player_hand_b,
-                                player_hand_c,
-                                player_hand_d,
-                                player_cards,
-                                dealer_cards,
-                                running_count,
-                                true_count,
-                                cards_dealt
-                            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                            """,
-                            (
-                                self.sim_number,
-                                trial_number,
-                                round_number,
-                                self.settings.num_decks,
-                                self.settings.penetration,
-                                "3:2"
-                                if self.settings.blackjack_payout == 1.5
-                                else "6:5",
-                                "H17" if self.settings.hit_soft_17 else "S17",
-                                int(self.settings.double_after_split),
-                                1 if self.settings.split_aces_logic.lower() == "carnival" else 0,
-                                self.settings.split_aces_logic,
-                                "E"
-                                if surrender_setting == "early"
-                                else "L"
-                                if surrender_setting == "late"
-                                else "N",
-                                hand_counter,
-                                hand.bet,
-                                hand_open_bankroll,
-                                player_settings.bankroll,
-                                player_entries[0],
-                                player_entries[1],
-                                player_entries[2],
-                                player_entries[3],
-                                player_cards_text,
-                                dealer_text,
-                                running_count,
-                                true_count,
-                                cards_dealt,
-                            ),
-                        )
-                if stop_play:
+            for _ in range(self.settings.hands_per_round):
+                if player_settings.bankroll < player_settings.bet_amount:
                     break
+                if shoe.penetration_reached:
+                    shoe.shuffle()
+                player_settings.bankroll -= player_settings.bet_amount
+                player_hand = Hand(bet=player_settings.bet_amount)
+                dealer_hand = Hand()
+                player_hand.add_card(shoe.draw())
+                dealer_hand.add_card(shoe.draw())
+                player_hand.add_card(shoe.draw())
+                dealer_hand.add_card(shoe.draw())
+
+                dealer_up = dealer_hand.cards[0].rank
+                dealer_checks_blackjack = dealer_up in {"10", "A"}
+                dealer_has_blackjack = dealer_checks_blackjack and dealer_hand.is_blackjack
+                surrender_setting = self.settings.surrender.lower()
+
+                if surrender_setting == "late" and dealer_has_blackjack:
+                    player_hands = [player_hand]
+                else:
+                    player_hands = player.play(
+                        shoe,
+                        dealer_up,
+                        player_hand,
+                        allow_surrender=allow_surrender,
+                    )
+
+                dealer_blackjack_active = dealer_has_blackjack and any(
+                    not h.surrendered for h in player_hands
+                )
+                if not dealer_blackjack_active and any(
+                    not h.is_bust and not h.surrendered for h in player_hands
+                ):
+                    dealer.play(dealer_hand, shoe)
+
+                player_entries, dealer_text = self._format_round(
+                    player_hands, dealer_hand
+                )
+                running_count = shoe.running_count
+                true_count = round(shoe.true_count, 1)
+                cards_dealt = shoe.cards_dealt
+                for hand in player_hands:
+                    hand_counter += 1
+                    hands_played += 1
+                    total_hands += 1
+                    hand_open_bankroll = player_settings.bankroll
+                    change = self.resolve_hand(hand, dealer_hand, player_settings)
+                    player_settings.bankroll += change
+                    cur.execute(
+                        """
+                        INSERT INTO temp_bankroll (round_number, hand, bankroll)
+                        VALUES (?,?,?)
+                        """,
+                        (round_number, hand_counter, player_settings.bankroll),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO temp_results (
+                            sim,
+                            round_number,
+                            decks,
+                            penetration,
+                            payout,
+                            soft17,
+                            das,
+                            rsa,
+                            surrender,
+                            hands,
+                            wager,
+                            open_bankroll,
+                            close_bankroll,
+                            player_hand_a,
+                            player_hand_b,
+                            player_hand_c,
+                            player_hand_d,
+                            dealer_cards,
+                            running_count,
+                            true_count,
+                            cards_dealt
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            self.sim_number,
+                            round_number,
+                            self.settings.num_decks,
+                            self.settings.penetration,
+                            "3:2"
+                            if self.settings.blackjack_payout == 1.5
+                            else "6:5",
+                            "H17" if self.settings.hit_soft_17 else "S17",
+                            int(self.settings.double_after_split),
+                            1 if self.settings.split_aces_logic.lower() == "carnival" else 0,
+                            "E"
+                            if surrender_setting == "early"
+                            else "L"
+                            if surrender_setting == "late"
+                            else "N",
+                            hand_counter,
+                            hand.bet,
+                            hand_open_bankroll,
+                            player_settings.bankroll,
+                            player_entries[0],
+                            player_entries[1],
+                            player_entries[2],
+                            player_entries[3],
+                            dealer_text,
+                            running_count,
+                            true_count,
+                            cards_dealt,
+                        ),
+                    )
             cur.execute(
-                "INSERT INTO temp_summary VALUES (?,?,?)",
-                (trial_number, hands_played, player_settings.bankroll),
+                "INSERT INTO temp_summary (round_number, hands_played, bankroll) VALUES (?,?,?)",
+                (round_number, hands_played, player_settings.bankroll),
             )
             for card, count in shoe.drawn_counts.items():
                 # Store tens as "T" for compact distribution records
                 rank = "T" if card == "10" else card
                 cur.execute(
-                    "INSERT INTO temp_card_distribution VALUES (?,?,?)",
-                    (trial_number, rank, count),
+                    "INSERT INTO temp_card_distribution (round_number, card, count) VALUES (?,?,?)",
+                    (round_number, rank, count),
                 )
             self.conn.commit()
         self.results_available = total_hands > 0
 
-    def save_results(self) -> None:
+    def save_results(self) -> str:
         """Persist temporary tables into permanent storage."""
         if self.settings.test_mode:
             raise RuntimeError("Cannot save results while in test mode")
+        seed_id = self._save_seed_snapshot()
         cur = self.conn.cursor()
         for permanent, temp in TABLE_PAIRS:
-            cur.execute(f"INSERT INTO {permanent} SELECT * FROM {temp}")
+            columns = TABLE_COLUMNS[permanent]
+            column_list = ", ".join(columns)
+            cur.execute(
+                f"INSERT INTO {permanent} ({column_list}) "
+                f"SELECT {column_list} FROM {temp}"
+            )
             cur.execute(f"DELETE FROM {temp}")
         self.conn.commit()
+        return seed_id
 
     def discard_results(self) -> None:
         """Remove any data from the temporary tables."""
@@ -358,6 +470,118 @@ class Simulator:
 
     def close(self) -> None:
         self.conn.close()
+
+    def _generate_seed_id(self) -> str:
+        alphabet = string.ascii_letters + string.digits
+        return "".join(random.choice(alphabet) for _ in range(7))
+
+    def _save_seed_snapshot(self) -> str:
+        cur = self.conn.cursor()
+        seed_id = self._generate_seed_id()
+        cur.execute("SELECT seed_id FROM saved_seeds WHERE seed_id = ?", (seed_id,))
+        while cur.fetchone():
+            seed_id = self._generate_seed_id()
+            cur.execute("SELECT seed_id FROM saved_seeds WHERE seed_id = ?", (seed_id,))
+
+        cur.execute("SELECT COUNT(*) FROM temp_results")
+        total_hands = cur.fetchone()[0]
+
+        cur.execute("SELECT DISTINCT round_number FROM temp_bankroll")
+        rounds = [row[0] for row in cur.fetchall() if row[0] is not None]
+        total_rounds = len(rounds)
+
+        cur.execute(
+            """
+            SELECT b.round_number, b.bankroll
+            FROM temp_bankroll b
+            JOIN (
+                SELECT round_number, MAX(hand) AS max_hand
+                FROM temp_bankroll
+                GROUP BY round_number
+            ) m
+            ON b.round_number = m.round_number AND b.hand = m.max_hand
+            """
+        )
+        ending_rows = cur.fetchall()
+        total_pl = sum(
+            bankroll - self.settings.bankroll for _, bankroll in ending_rows
+        )
+
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            """
+            INSERT INTO saved_seeds (
+                seed_id,
+                created_at,
+                total_rounds,
+                total_hands,
+                total_pl,
+                starting_bankroll,
+                favorite
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                seed_id,
+                created_at,
+                total_rounds,
+                total_hands,
+                total_pl,
+                self.settings.bankroll,
+                0,
+            ),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO saved_seed_bankroll (
+                seed_id,
+                round_number,
+                hand,
+                bankroll
+            )
+            SELECT ?, round_number, hand, bankroll FROM temp_bankroll
+            """,
+            (seed_id,),
+        )
+        cur.execute(
+            """
+            INSERT INTO saved_seed_results (
+                seed_id,
+                round_number,
+                hand,
+                wager,
+                open_bankroll,
+                close_bankroll,
+                player_hand_a,
+                player_hand_b,
+                player_hand_c,
+                player_hand_d,
+                dealer_cards,
+                cards_dealt,
+                running_count,
+                true_count
+            )
+            SELECT
+                ?,
+                round_number,
+                hands,
+                wager,
+                open_bankroll,
+                close_bankroll,
+                player_hand_a,
+                player_hand_b,
+                player_hand_c,
+                player_hand_d,
+                dealer_cards,
+                cards_dealt,
+                running_count,
+                true_count
+            FROM temp_results
+            """,
+            (seed_id,),
+        )
+        self.conn.commit()
+        return seed_id
 
     def resolve_hand(self, hand, dealer_hand, settings: PlayerSettings) -> float:
         if hand.surrendered:

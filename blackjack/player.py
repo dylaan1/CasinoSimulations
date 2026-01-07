@@ -54,6 +54,8 @@ class Player:
             hand.bet /= 2
             return
         while True:
+            if 17 <= hand.best_value <= 21:
+                return
             if hand.is_blackjack or hand.is_bust:
                 return
             if hand.is_split_aces:

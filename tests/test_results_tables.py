@@ -1,14 +1,12 @@
 from blackjack.simulator import Simulator
 from blackjack.settings import SimulationSettings
-from blackjack.simulator import Simulator
 
 
 def run_sim(tmp_path):
     strategy = tmp_path / "strategy.json"
     strategy.write_text("{}")
     settings = SimulationSettings(
-        trials=1,
-        rounds_per_trial=1,
+        rounds=1,
         hands_per_round=2,
         bankroll=10,
         blackjack_payout=1.5,
@@ -20,7 +18,6 @@ def run_sim(tmp_path):
         penetration=0.75,
         strategy_file=str(strategy),
         database=":memory:",
-        seed=1,
     )
     sim = Simulator(settings)
     sim.run()
