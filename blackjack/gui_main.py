@@ -118,11 +118,11 @@ class SimulatorGUI:
             text="Exit",
             command=self.exit_prompt,
             bg="red",
-            fg="white",
+            fg="black",
             activebackground="red",
-            activeforeground="white",
-            padx=14,
-            pady=4,
+            activeforeground="black",
+            padx=10,
+            pady=2,
         ).pack(side=tk.RIGHT)
 
     def _build_settings_bar(self):
