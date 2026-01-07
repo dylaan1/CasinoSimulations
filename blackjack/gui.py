@@ -1,11 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, font as tkfont
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import pandas as pd
 import sqlite3
 
-from .gui_data import DataWindow
+from .gui_data import ChartWindow
 from .settings import SimulationSettings
 from .simulator import Simulator
 
@@ -30,7 +29,7 @@ class SimulatorGUI:
         self.hover_annotation = None
         self._last_plots: list[tuple[int, pd.DataFrame]] = []
         self.results_df = pd.DataFrame()
-        self.data_window: DataWindow | None = None
+        self.chart_window: ChartWindow | None = None
         self.loaded_seed_id: str | None = None
         self.loaded_bankroll_df = pd.DataFrame()
         self.loaded_starting_bankroll: float | None = None
@@ -67,32 +66,30 @@ class SimulatorGUI:
         self.top_panel.rowconfigure(2, weight=1)
         self.top_panel.columnconfigure(0, weight=1)
 
-        fig = Figure(figsize=(7.5, 4.5), dpi=100, constrained_layout=True)
-        self.ax = fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(fig, master=self.top_panel)
+        self.figure = Figure(figsize=(7.5, 4.5), dpi=100, constrained_layout=True)
+        self.ax = self.figure.add_subplot(111)
         self.test_mode_label = tk.Label(
             self.top_panel, text="The Simulator is currently in 'Test Mode'", fg="red"
         )
 
         self._build_chart_controls(self.top_panel)
 
-        chart_frame = tk.Frame(self.top_panel, padx=10, pady=6)
-        chart_frame.grid(row=2, column=0, sticky="nsew")
-        chart_frame.rowconfigure(0, weight=1)
-        chart_frame.columnconfigure(0, weight=1)
-        self.canvas.get_tk_widget().pack(in_=chart_frame, fill=tk.BOTH, expand=True)
-        self.canvas.mpl_connect("motion_notify_event", self._on_hover)
+        data_frame = ttk.Frame(self.top_panel, padding=(20, 10))
+        data_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=6)
+        data_frame.rowconfigure(0, weight=1)
+        data_frame.columnconfigure(0, weight=1)
+        self._build_data_table(data_frame)
 
-        chart_footer = tk.Frame(self.top_panel, padx=10)
-        chart_footer.grid(row=3, column=0, sticky="ew", pady=(0, 6))
-        chart_footer.columnconfigure(0, weight=1)
-        self.view_data_btn = ttk.Button(
-            chart_footer,
-            text="View Data",
-            command=self.open_data_window,
+        data_footer = tk.Frame(self.top_panel, padx=10)
+        data_footer.grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        data_footer.columnconfigure(0, weight=1)
+        self.view_chart_btn = ttk.Button(
+            data_footer,
+            text="View Chart",
+            command=self.open_chart_window,
             state=tk.DISABLED,
         )
-        self.view_data_btn.grid(row=0, column=1, sticky="e")
+        self.view_chart_btn.grid(row=0, column=1, sticky="e")
 
         self.bottom_panel = tk.Frame(self.root, padx=10, pady=10)
         self.bottom_panel.grid(row=1, column=0, sticky="nsew")
@@ -103,16 +100,19 @@ class SimulatorGUI:
         self._build_settings_bar()
         self.settings_bar.pack(anchor="center", pady=(0, 8))
 
-        footer = tk.Frame(self.bottom_panel)
-        footer.pack(fill=tk.X)
+        footer = ttk.Frame(self.bottom_panel, padding=(10, 8))
+        footer.pack(fill=tk.X, pady=(6, 0))
         seed_frame = ttk.Frame(footer)
         seed_frame.pack(side=tk.LEFT)
         ttk.Label(seed_frame, text="Seed").pack(side=tk.LEFT, padx=(0, 6))
-        seed_entry = ttk.Entry(seed_frame, textvariable=self.seed_id, width=12)
+        seed_entry = ttk.Entry(seed_frame, textvariable=self.seed_id, width=18)
         seed_entry.pack(side=tk.LEFT)
-        ttk.Button(seed_frame, text="Choose Seed", command=self.open_seed_manager).pack(
-            side=tk.LEFT, padx=(6, 0)
-        )
+        ttk.Button(
+            seed_frame,
+            text="Choose Seed",
+            command=self.open_seed_manager,
+            padding=(10, 4),
+        ).pack(side=tk.LEFT, padx=(6, 0))
         tk.Button(
             footer,
             text="Exit",
@@ -121,6 +121,8 @@ class SimulatorGUI:
             fg="white",
             activebackground="red",
             activeforeground="white",
+            padx=14,
+            pady=4,
         ).pack(side=tk.RIGHT)
 
     def _build_settings_bar(self):
@@ -300,6 +302,83 @@ class SimulatorGUI:
             controls, text="Discard", command=self.discard_results, state=tk.DISABLED
         )
         self.discard_btn.grid(row=0, column=7)
+
+    def _build_data_table(self, parent: tk.Widget):
+        style = ttk.Style(parent)
+        style.configure(
+            "Data.Treeview",
+            rowheight=24,
+            borderwidth=1,
+            relief="solid",
+            background="white",
+            fieldbackground="white",
+            bordercolor="#c7c7c7",
+            lightcolor="#c7c7c7",
+            darkcolor="#c7c7c7",
+        )
+        style.configure(
+            "Data.Treeview.Heading",
+            font=(None, 9, "bold"),
+            borderwidth=1,
+            relief="solid",
+        )
+        style.map(
+            "Data.Treeview",
+            background=[("selected", "#dbe6f5")],
+            foreground=[("selected", "#000000")],
+        )
+
+        table_frame = ttk.Frame(parent)
+        table_frame.grid(row=0, column=0, sticky="nsew")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        self.data_tree = ttk.Treeview(
+            table_frame,
+            show="headings",
+            style="Data.Treeview",
+            selectmode="browse",
+        )
+        self.data_tree.grid(row=0, column=0, sticky="nsew")
+        v_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.data_tree.yview)
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        self.data_tree.configure(yscrollcommand=v_scroll.set)
+        self.data_tree.tag_configure("odd_row", background="white")
+        self.data_tree.tag_configure("even_row", background="#f6f6f6")
+
+    def _populate_data_table(self, dataframe: pd.DataFrame):
+        self.data_tree.delete(*self.data_tree.get_children())
+        if dataframe.empty:
+            return
+
+        columns = list(dataframe.columns)
+        self.data_tree["columns"] = columns
+
+        font = tkfont.nametofont("TkDefaultFont")
+        widths = []
+        for col in columns:
+            max_text = max([str(col)] + [str(v) for v in dataframe[col].tolist()], key=len)
+            widths.append(font.measure(max_text) + 24)
+
+        self.data_tree.update_idletasks()
+        available_width = max(self.data_tree.winfo_width(), self.root.winfo_width()) - 40
+        if available_width <= 0:
+            available_width = int(self.root.winfo_screenwidth() * 0.9)
+
+        total_width = sum(widths)
+        min_width = 60
+        if total_width > available_width:
+            scale = available_width / total_width
+            widths = [max(min_width, int(width * scale)) for width in widths]
+
+        for col, width in zip(columns, widths):
+            self.data_tree.heading(col, text=col, anchor=tk.E)
+            self.data_tree.column(col, anchor=tk.E, width=width, minwidth=min_width, stretch=True)
+
+        for idx, (_, row) in enumerate(dataframe.iterrows()):
+            values = ["" if pd.isna(row[col]) else row[col] for col in columns]
+            tag = "even_row" if idx % 2 == 0 else "odd_row"
+            self.data_tree.insert("", tk.END, values=values, tags=(tag,))
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
         base_bg = parent.winfo_toplevel().cget("bg")
@@ -536,34 +615,35 @@ class SimulatorGUI:
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.85),
             )
 
-        self.canvas.draw_idle()
+        self._draw_chart_idle()
 
     def _clear_plot(self):
         self.ax.clear()
         if self.hover_annotation:
             self.hover_annotation.set_visible(False)
         self._last_plots = []
-        self.canvas.draw()
+        self._draw_chart()
 
     def _clear_table(self):
         self.results_df = pd.DataFrame()
-        self.view_data_btn.state(["disabled"])
-        if self.data_window and self.data_window.is_open():
-            self.data_window.close()
+        self.view_chart_btn.state(["disabled"])
+        self.data_tree.delete(*self.data_tree.get_children())
         self.loaded_seed_id = None
         self.loaded_bankroll_df = pd.DataFrame()
         self.loaded_starting_bankroll = None
 
-    def open_data_window(self):
-        if self.results_df.empty:
+    def open_chart_window(self):
+        if self.chart_window and self.chart_window.is_open():
+            self.chart_window.win.lift()
+            self.chart_window.draw_idle()
             return
-        if self.data_window and self.data_window.is_open():
-            self.data_window.update_dataframe(self.results_df)
-            self.data_window.win.lift()
-            return
-        self.data_window = DataWindow(
-            self.root, self.results_df, on_close=lambda: setattr(self, "data_window", None)
+        self.chart_window = ChartWindow(
+            self.root,
+            self.figure,
+            on_close=lambda: setattr(self, "chart_window", None),
+            on_hover=self._on_hover,
         )
+        self._draw_chart_idle()
 
     def _parse_round_selection(self) -> list[int]:
         raw = self.round_filter.get().strip().lower()
@@ -599,7 +679,7 @@ class SimulatorGUI:
         if not hasattr(self, "_last_plots") or not self._last_plots or event.inaxes != self.ax:
             if self.hover_annotation:
                 self.hover_annotation.set_visible(False)
-                self.canvas.draw_idle()
+                self._draw_chart_idle()
             return
 
         if event.xdata is None:
@@ -631,7 +711,15 @@ class SimulatorGUI:
             self.hover_annotation.set_text(text)
             self.hover_annotation.set_visible(True)
 
-        self.canvas.draw_idle()
+        self._draw_chart_idle()
+
+    def _draw_chart(self):
+        if self.chart_window and self.chart_window.is_open():
+            self.chart_window.draw()
+
+    def _draw_chart_idle(self):
+        if self.chart_window and self.chart_window.is_open():
+            self.chart_window.draw_idle()
 
     def update_table(self):
         if self.sim:
@@ -686,26 +774,24 @@ class SimulatorGUI:
             inplace=True,
         )
         df["True Count"] = df["True Count"].map(lambda val: f"{val:.1f}")
-        self.results_df = df[
-            [
-                "Round #",
-                "Hand #",
-                "Wager",
-                "Open Bankroll",
-                "Close Bankroll",
-                "Player Hand A",
-                "Player Hand B",
-                "Player Hand C",
-                "Player Hand D",
-                "Dealer Cards",
-                "Cards Dealt",
-                "Running Count",
-                "True Count",
-            ]
+        column_order = [
+            "Round #",
+            "Hand #",
+            "Wager",
+            "Running Count",
+            "True Count",
+            "Cards Dealt",
+            "Open Bankroll",
+            "Close Bankroll",
+            "Dealer Cards",
+            "Player Hand A",
+            "Player Hand B",
+            "Player Hand C",
+            "Player Hand D",
         ]
-        self.view_data_btn.state(["!disabled"])
-        if self.data_window and self.data_window.is_open():
-            self.data_window.update_dataframe(self.results_df)
+        self.results_df = df[column_order]
+        self.view_chart_btn.state(["!disabled"])
+        self._populate_data_table(self.results_df)
 
     def _refresh_seed_tree(self):
         if not hasattr(self, "seed_tree"):
