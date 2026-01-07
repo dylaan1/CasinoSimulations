@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List
 
-from .cards import Card
+from .game_cards import Card
 
 @dataclass
 class Hand:
