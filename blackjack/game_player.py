@@ -2,9 +2,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from .hand import Hand
-from .cards import Shoe
-from .strategy import BasicStrategy
+from .game_hand import Hand
+from .game_cards import Shoe
+from .sys_strategy import BasicStrategy
 
 @dataclass
 class PlayerSettings:
