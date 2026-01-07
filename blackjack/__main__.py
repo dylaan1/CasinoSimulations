@@ -18,17 +18,17 @@ def _bootstrap_imports():
     global SimulatorGUI, SimulationSettings, DEFAULT_STRATEGY_FILE, Simulator
 
     try:  # Running as a package ("python -m blackjack")
-        from .gui import SimulatorGUI
-        from .settings import SimulationSettings, DEFAULT_STRATEGY_FILE
-        from .simulator import Simulator
+        from .gui_main import SimulatorGUI
+        from .sys_settings import SimulationSettings, DEFAULT_STRATEGY_FILE
+        from .sys_simulator import Simulator
     except ImportError:
         package_root = Path(__file__).resolve().parent.parent
         if str(package_root) not in sys.path:
             sys.path.insert(0, str(package_root))
 
-        from blackjack.gui import SimulatorGUI
-        from blackjack.settings import SimulationSettings, DEFAULT_STRATEGY_FILE
-        from blackjack.simulator import Simulator
+        from blackjack.gui_main import SimulatorGUI
+        from blackjack.sys_settings import SimulationSettings, DEFAULT_STRATEGY_FILE
+        from blackjack.sys_simulator import Simulator
 
 
 _bootstrap_imports()
