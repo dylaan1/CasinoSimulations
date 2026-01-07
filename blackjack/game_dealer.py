@@ -1,8 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
-from .cards import Shoe
-from .hand import Hand
+from .game_cards import Shoe
+from .game_hand import Hand
 
 @dataclass
 class Dealer:
