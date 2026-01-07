@@ -47,6 +47,7 @@ class SimulatorGUI:
         self.split_aces_logic = tk.StringVar(value="Single")
         self.surrender = tk.StringVar(value="None")
         self.das_switch_text = tk.StringVar()
+        self.test_mode_switch_text = tk.StringVar()
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
         self.penetration = tk.DoubleVar(value=0.80)
@@ -54,67 +55,145 @@ class SimulatorGUI:
         self.test_mode = tk.BooleanVar()
         self.das.trace_add("write", lambda *args: self._update_das_switch_label())
         self.test_mode.trace_add("write", lambda *args: self._update_test_mode_label())
+        self.test_mode.trace_add("write", lambda *args: self._update_test_mode_switch_label())
 
         self.round_filter = tk.StringVar(value="all")
+        self.data_round_filter = tk.StringVar(value="all")
 
         self._build_widgets()
+        self._update_das_switch_label()
         self._update_test_mode_label()
+        self._update_test_mode_switch_label()
 
     def _build_widgets(self):
         self.top_panel = tk.Frame(self.root)
         self.top_panel.grid(row=0, column=0, sticky="nsew")
-        self.top_panel.rowconfigure(2, weight=1)
+        self.top_panel.rowconfigure(1, weight=1)
         self.top_panel.columnconfigure(0, weight=1)
 
         self.figure = Figure(figsize=(7.5, 4.5), dpi=100, constrained_layout=True)
         self.ax = self.figure.add_subplot(111)
+        self.header_frame = tk.Frame(self.top_panel)
+        self.header_frame.grid(row=0, column=0, sticky="ew", pady=(8, 4))
+        self.header_frame.columnconfigure(0, weight=1)
+        title_font = tkfont.Font(family="Verdana", size=20, weight="bold")
+        subtitle_font = tkfont.Font(family="Verdana", size=12)
+        tk.Label(
+            self.header_frame,
+            text="CasinoSimulations™ Blackjack",
+            font=title_font,
+        ).grid(row=0, column=0)
+        tk.Label(
+            self.header_frame,
+            text="DataFrame",
+            font=subtitle_font,
+        ).grid(row=1, column=0)
         self.test_mode_label = tk.Label(
-            self.top_panel, text="The Simulator is currently in 'Test Mode'", fg="red"
+            self.header_frame,
+            text="The Simulator is currently in 'Test Mode'",
+            fg="red",
         )
 
-        self._build_chart_controls(self.top_panel)
-
         data_frame = ttk.Frame(self.top_panel, padding=(20, 10))
-        data_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=6)
+        data_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=6)
         data_frame.rowconfigure(0, weight=1)
         data_frame.columnconfigure(0, weight=1)
         self._build_data_table(data_frame)
-
-        data_footer = tk.Frame(self.top_panel, padx=10)
-        data_footer.grid(row=3, column=0, sticky="ew", pady=(0, 6))
-        data_footer.columnconfigure(0, weight=1)
-        self.view_chart_btn = ttk.Button(
-            data_footer,
-            text="View Chart",
-            command=self.open_chart_window,
-            state=tk.DISABLED,
-        )
-        self.view_chart_btn.grid(row=0, column=1, sticky="e")
 
         self.bottom_panel = tk.Frame(self.root, padx=10, pady=10)
         self.bottom_panel.grid(row=1, column=0, sticky="nsew")
         self.bottom_panel.rowconfigure(0, weight=1)
         self.bottom_panel.columnconfigure(0, weight=1)
+        self.bottom_panel.columnconfigure(1, weight=1)
 
-        self.settings_bar = ttk.Frame(self.bottom_panel, padding=(10, 6))
-        self._build_settings_bar()
-        self.settings_bar.pack(anchor="center", pady=(0, 8))
+        self.settings_bin = ttk.Frame(self.bottom_panel, padding=(12, 10), relief="groove")
+        self.settings_bin.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.settings_bin.columnconfigure(0, weight=1)
+        self.settings_bin.rowconfigure(1, weight=1)
 
-        footer = ttk.Frame(self.bottom_panel, padding=(10, 8))
-        footer.pack(fill=tk.X, pady=(6, 0))
-        seed_frame = ttk.Frame(footer)
-        seed_frame.pack(side=tk.LEFT)
+        settings_title = tk.Label(
+            self.settings_bin,
+            text="Settings",
+            font=tkfont.Font(family="Verdana", size=14, weight="bold"),
+        )
+        settings_title.grid(row=0, column=0, pady=(0, 6))
+
+        self.settings_bar = ttk.Frame(self.settings_bin, padding=(10, 6))
+        self._build_settings_bar(self.settings_bar)
+        self.settings_bar.grid(row=1, column=0, sticky="n")
+
+        settings_buttons = ttk.Frame(self.settings_bin)
+        settings_buttons.grid(row=2, column=0, sticky="s", pady=(8, 0))
+        self.run_btn = ttk.Button(
+            settings_buttons, text="Run", command=self.run_simulation
+        )
+        self.run_btn.grid(row=0, column=0, padx=6)
+        self.save_btn = ttk.Button(
+            settings_buttons,
+            text="Save",
+            command=self.save_results,
+            state=tk.DISABLED,
+        )
+        self.save_btn.grid(row=0, column=1, padx=6)
+        self.discard_btn = ttk.Button(
+            settings_buttons,
+            text="Discard",
+            command=self.discard_results,
+            state=tk.DISABLED,
+        )
+        self.discard_btn.grid(row=0, column=2, padx=6)
+
+        self.stats_bin = ttk.Frame(self.bottom_panel, padding=(12, 10), relief="groove")
+        self.stats_bin.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self.stats_bin.columnconfigure(0, weight=1)
+        self.stats_bin.rowconfigure(1, weight=1)
+
+        stats_title = tk.Label(
+            self.stats_bin,
+            text="Statistics",
+            font=tkfont.Font(family="Verdana", size=14, weight="bold"),
+        )
+        stats_title.grid(row=0, column=0, pady=(0, 6))
+
+        self.stats_frame = ttk.Frame(self.stats_bin)
+        self.stats_frame.grid(row=1, column=0, sticky="n")
+        self._build_statistics_panel(self.stats_frame)
+
+        round_frame = ttk.Frame(self.stats_bin)
+        round_frame.grid(row=2, column=0, pady=(8, 4))
+        ttk.Label(round_frame, text="Round View").pack(side=tk.TOP)
+        self.data_round_combo = ttk.Combobox(
+            round_frame,
+            textvariable=self.data_round_filter,
+            values=["all"],
+            width=8,
+        )
+        self.data_round_combo.pack(side=tk.TOP, pady=(4, 0))
+        self.data_round_combo.bind("<<ComboboxSelected>>", lambda *_: self.update_table())
+        self.data_round_combo.bind("<Return>", lambda *_: self.update_table())
+
+        seed_frame = ttk.Frame(self.stats_bin)
+        seed_frame.grid(row=3, column=0, pady=(6, 6))
         ttk.Label(seed_frame, text="Seed").pack(side=tk.LEFT, padx=(0, 6))
-        seed_entry = ttk.Entry(seed_frame, textvariable=self.seed_id, width=18)
-        seed_entry.pack(side=tk.LEFT)
+        ttk.Entry(seed_frame, textvariable=self.seed_id, width=18).pack(side=tk.LEFT)
         ttk.Button(
             seed_frame,
             text="Choose Seed",
             command=self.open_seed_manager,
             padding=(10, 4),
         ).pack(side=tk.LEFT, padx=(6, 0))
+
+        action_frame = ttk.Frame(self.stats_bin)
+        action_frame.grid(row=4, column=0, sticky="e", pady=(6, 0))
+        self.view_chart_btn = ttk.Button(
+            action_frame,
+            text="View Chart",
+            command=self.open_chart_window,
+            state=tk.DISABLED,
+        )
+        self.view_chart_btn.pack(side=tk.LEFT, padx=(0, 6))
         tk.Button(
-            footer,
+            action_frame,
             text="Exit",
             command=self.exit_prompt,
             bg="red",
@@ -123,9 +202,9 @@ class SimulatorGUI:
             activeforeground="black",
             padx=10,
             pady=2,
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.LEFT)
 
-    def _build_settings_bar(self):
+    def _build_settings_bar(self, parent: tk.Widget):
         label_font = tkfont.Font(family="Verdana")
         label_font.configure(size=max(label_font["size"] - 1, 11))
         section_font = tkfont.Font(family="Verdana")
@@ -143,7 +222,7 @@ class SimulatorGUI:
             return frame
 
         def add_row(title: str, bin_specs: list[tuple[str, callable]]):
-            row_frame = ttk.Frame(self.settings_bar)
+            row_frame = ttk.Frame(parent)
             row_frame.pack(anchor="center", pady=(2, 6))
             ttk.Label(row_frame, text=title, font=section_font).grid(
                 row=0, column=0, sticky="nw", padx=(0, 12)
@@ -201,7 +280,9 @@ class SimulatorGUI:
             ),
             (
                 "Double After Split",
-                lambda parent: self._build_switch(parent, self.das),
+                lambda parent: self._build_toggle_button(
+                    parent, self.das, self.das_switch_text
+                ),
             ),
             (
                 "Split Aces Logic",
@@ -245,7 +326,12 @@ class SimulatorGUI:
                     width=max(18, len(self.database.get())),
                 ),
             ),
-            ("Test Mode", lambda parent: self._build_switch(parent, self.test_mode)),
+            (
+                "Test Mode",
+                lambda parent: self._build_toggle_button(
+                    parent, self.test_mode, self.test_mode_switch_text
+                ),
+            ),
         ]
 
         add_row("SIMULATION SETTINGS", sim_bins)
@@ -255,15 +341,17 @@ class SimulatorGUI:
     def _update_das_switch_label(self):
         self.das_switch_text.set("On" if self.das.get() else "Off")
 
+    def _update_test_mode_switch_label(self):
+        self.test_mode_switch_text.set("On" if self.test_mode.get() else "Off")
+
     def _update_test_mode_label(self):
         if self.test_mode.get():
             self.test_mode_label.grid(
-                row=0,
+                row=2,
                 column=0,
                 sticky="ew",
-                in_=self.top_panel,
+                in_=self.header_frame,
                 pady=(4, 0),
-                padx=10,
             )
         else:
             self.test_mode_label.grid_forget()
@@ -345,6 +433,8 @@ class SimulatorGUI:
         self.data_tree.configure(yscrollcommand=v_scroll.set)
         self.data_tree.tag_configure("odd_row", background="white")
         self.data_tree.tag_configure("even_row", background="#f6f6f6")
+        self.data_tree.tag_configure("player_cards", foreground="#1f5cff")
+        self.data_tree.tag_configure("dealer_up", foreground="#ff1f1f")
 
     def _populate_data_table(self, dataframe: pd.DataFrame):
         self.data_tree.delete(*self.data_tree.get_children())
@@ -378,7 +468,135 @@ class SimulatorGUI:
         for idx, (_, row) in enumerate(dataframe.iterrows()):
             values = ["" if pd.isna(row[col]) else row[col] for col in columns]
             tag = "even_row" if idx % 2 == 0 else "odd_row"
-            self.data_tree.insert("", tk.END, values=values, tags=(tag,))
+            item_id = self.data_tree.insert("", tk.END, values=values, tags=(tag,))
+            self._apply_card_color_tags(item_id, columns, values)
+
+    def _apply_card_color_tags(self, item_id: str, columns: list[str], values: list[str]):
+        player_columns = {"Player Hand A", "Player Hand B", "Player Hand C", "Player Hand D"}
+        dealer_column = "Dealer Cards"
+        for col, value in zip(columns, values):
+            if not value:
+                continue
+            if col in player_columns:
+                self.data_tree.tk.call(
+                    self.data_tree, "tag", "add", "player_cards", item_id, col
+                )
+            if col == dealer_column:
+                self.data_tree.tk.call(
+                    self.data_tree, "tag", "add", "dealer_up", item_id, col
+                )
+
+    def _build_toggle_button(
+        self, parent: tk.Widget, variable: tk.BooleanVar, text_var: tk.StringVar
+    ) -> tk.Widget:
+        def toggle():
+            variable.set(not variable.get())
+
+        button = ttk.Button(parent, textvariable=text_var, command=toggle, width=6)
+        return button
+
+    def _build_statistics_panel(self, parent: tk.Widget):
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
+        label_font = tkfont.Font(family="Verdana", size=10)
+        stats = [
+            ("Split Aces Logic", "split_aces_logic"),
+            ("Double After Split", "double_after_split"),
+            ("Total # of Rounds", "total_rounds"),
+            ("Total # of Hands Played", "total_hands"),
+            ("Total # of Shoes Played", "total_shoes"),
+            ("Total # of Cards Dealt", "total_cards"),
+            ("Total # of Hands Won", "total_wins"),
+            ("Total # of Hands Lost", "total_losses"),
+            ("Total # of Double Downs", "total_doubles"),
+            ("Total # of Splits (all cards)", "total_splits"),
+            ("Total # of Split Aces", "total_split_aces"),
+            ("Total # of Surrenders", "total_surrenders"),
+            ("Average # Hands Played", "avg_hands"),
+            ("Average P/L ($)", "avg_pl"),
+            ("Average Open Bankroll", "avg_open_bankroll"),
+            ("Average Close Bankroll", "avg_close_bankroll"),
+        ]
+        self.stat_vars: dict[str, tk.StringVar] = {}
+        for row_index, (label, key) in enumerate(stats):
+            ttk.Label(parent, text=f"{label}:", font=label_font).grid(
+                row=row_index, column=0, sticky="w", padx=(0, 6), pady=1
+            )
+            var = tk.StringVar(value="0")
+            self.stat_vars[key] = var
+            ttk.Label(parent, textvariable=var, font=label_font).grid(
+                row=row_index, column=1, sticky="w", pady=1
+            )
+
+    def _update_statistics(self, df: pd.DataFrame):
+        if not hasattr(self, "stat_vars"):
+            return
+        if df.empty:
+            for key, var in self.stat_vars.items():
+                if key == "split_aces_logic":
+                    split_logic = self.split_aces_logic.get()
+                    split_logic_label = "Carnival" if split_logic.lower() == "carnival" else "Simple"
+                    var.set(split_logic_label)
+                elif key == "double_after_split":
+                    var.set("Y" if self.das.get() else "N")
+                else:
+                    var.set("0")
+            return
+
+        total_rounds = int(df["round_number"].nunique())
+        total_hands = int(len(df))
+        total_shoes = total_rounds
+        cards_by_round = df.groupby("round_number")["cards_dealt"].max()
+        total_cards = int(cards_by_round.sum()) if not cards_by_round.empty else 0
+        bankroll_change = df["close_bankroll"] - df["open_bankroll"]
+        total_wins = int((bankroll_change > 0).sum())
+        total_losses = int((bankroll_change < 0).sum())
+        base_wager = float(df["wager"].min()) if not df["wager"].empty else 0.0
+        total_doubles = int((df["wager"] > base_wager + 1e-9).sum())
+        split_columns = ["player_hand_b", "player_hand_c", "player_hand_d"]
+        split_mask = df[split_columns].apply(
+            lambda row: any(str(val).strip() for val in row if pd.notna(val)),
+            axis=1,
+        )
+        total_splits = int(split_mask.sum())
+        split_aces = 0
+        if total_splits:
+            split_entries = df.loc[split_mask, split_columns].values.flatten().tolist()
+            for entry in split_entries:
+                if not entry or (isinstance(entry, float) and pd.isna(entry)):
+                    continue
+                text = str(entry).strip()
+                if text.startswith("A"):
+                    split_aces += 1
+        total_surrenders = int(
+            df[["player_hand_a", "player_hand_b", "player_hand_c", "player_hand_d"]]
+            .astype(str)
+            .apply(lambda row: row.str.contains("Surrender").any(), axis=1)
+            .sum()
+        )
+        avg_hands = total_hands / total_rounds if total_rounds else 0
+        avg_pl = bankroll_change.mean() if total_hands else 0
+        avg_open = df["open_bankroll"].mean() if total_hands else 0
+        avg_close = df["close_bankroll"].mean() if total_hands else 0
+
+        split_logic = self.split_aces_logic.get()
+        split_logic_label = "Carnival" if split_logic.lower() == "carnival" else "Simple"
+        self.stat_vars["split_aces_logic"].set(split_logic_label)
+        self.stat_vars["double_after_split"].set("Y" if self.das.get() else "N")
+        self.stat_vars["total_rounds"].set(f"{total_rounds}")
+        self.stat_vars["total_hands"].set(f"{total_hands}")
+        self.stat_vars["total_shoes"].set(f"{total_shoes}")
+        self.stat_vars["total_cards"].set(f"{total_cards}")
+        self.stat_vars["total_wins"].set(f"{total_wins}")
+        self.stat_vars["total_losses"].set(f"{total_losses}")
+        self.stat_vars["total_doubles"].set(f"{total_doubles}")
+        self.stat_vars["total_splits"].set(f"{total_splits}")
+        self.stat_vars["total_split_aces"].set(f"{split_aces}")
+        self.stat_vars["total_surrenders"].set(f"{total_surrenders}")
+        self.stat_vars["avg_hands"].set(f"{avg_hands:.2f}")
+        self.stat_vars["avg_pl"].set(f"{avg_pl:,.2f}")
+        self.stat_vars["avg_open_bankroll"].set(f"{avg_open:,.2f}")
+        self.stat_vars["avg_close_bankroll"].set(f"{avg_close:,.2f}")
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
         base_bg = "#fad7c1"
@@ -499,6 +717,8 @@ class SimulatorGUI:
             return
         self.available_rounds = list(range(1, self.rounds.get() + 1))
         self.round_filter.set("all")
+        self.data_round_filter.set("all")
+        self._refresh_round_filters()
         self.update_graph()
         self.update_table()
         if not self.sim.results_available:
@@ -509,6 +729,8 @@ class SimulatorGUI:
             self._clear_table()
             self.available_rounds = []
             self.round_filter.set("all")
+            self.data_round_filter.set("all")
+            self._refresh_round_filters()
             self.save_btn.config(state=tk.DISABLED)
             self.discard_btn.config(state=tk.DISABLED)
             return
@@ -631,6 +853,9 @@ class SimulatorGUI:
         self.loaded_seed_id = None
         self.loaded_bankroll_df = pd.DataFrame()
         self.loaded_starting_bankroll = None
+        self.data_round_filter.set("all")
+        self._refresh_round_filters()
+        self._update_statistics(pd.DataFrame())
 
     def open_chart_window(self):
         if self.chart_window and self.chart_window.is_open():
@@ -642,11 +867,15 @@ class SimulatorGUI:
             self.figure,
             on_close=lambda: setattr(self, "chart_window", None),
             on_hover=self._on_hover,
+            round_var=self.round_filter,
+            on_apply=self.update_graph,
+            on_show_all=self._show_all_rounds,
         )
+        self._refresh_round_filters()
         self._draw_chart_idle()
 
-    def _parse_round_selection(self) -> list[int]:
-        raw = self.round_filter.get().strip().lower()
+    def _parse_round_selection(self, raw: str | None = None) -> list[int]:
+        raw = (raw if raw is not None else self.round_filter.get()).strip().lower()
         if not raw or raw == "all":
             return self.available_rounds
 
@@ -670,6 +899,15 @@ class SimulatorGUI:
                     continue
 
         return [t for t in sorted(selected) if t in self.available_rounds]
+
+    def _refresh_round_filters(self):
+        values = ["all"] + [str(r) for r in sorted(self.available_rounds)]
+        if hasattr(self, "data_round_combo"):
+            self.data_round_combo["values"] = values
+            if self.data_round_filter.get() not in values:
+                self.data_round_filter.set("all")
+        if self.chart_window and self.chart_window.is_open():
+            self.chart_window.set_round_values(self.available_rounds)
 
     def _show_all_rounds(self):
         self.round_filter.set("all")
@@ -754,6 +992,14 @@ class SimulatorGUI:
             self._clear_table()
             return
 
+        selected_rounds = self._parse_round_selection(self.data_round_filter.get())
+        if selected_rounds:
+            df = df[df["round_number"].isin(selected_rounds)].copy()
+        if df.empty:
+            self._clear_table()
+            return
+
+        self._update_statistics(df)
         df["true_count"] = df["true_count"].round(1)
         df.rename(
             columns={
@@ -934,6 +1180,8 @@ class SimulatorGUI:
 
         self.available_rounds = sorted(bankroll_df["round_number"].unique().tolist())
         self.round_filter.set("all")
+        self.data_round_filter.set("all")
+        self._refresh_round_filters()
         self.update_graph()
         self.update_table()
         self.save_btn.config(state=tk.DISABLED)

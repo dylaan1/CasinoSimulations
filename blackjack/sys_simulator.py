@@ -265,10 +265,8 @@ class Simulator:
             """
         )
 
-    def _format_round(
-        self, player_hands: List[Hand], dealer_hand: Hand
-    ) -> tuple[list[str], str]:
-        """Return compact player/dealer summaries for table display."""
+    def _format_hand(self, hand: Hand, base_bet: float) -> str:
+        """Return a compact hand summary for table display."""
 
         suit_glyphs = {
             "hearts": "♥",
@@ -282,24 +280,37 @@ class Simulator:
             rank = "T" if card.rank == "10" else card.rank
             return f"{rank}{glyph}" if glyph else rank
 
-        def describe(hand: Hand) -> str:
-            cards = ", ".join(render_card(c) for c in hand.cards)
-            if hand.surrendered:
-                return f"{cards} | Surrender"
-            if hand.is_blackjack:
-                return f"{cards} | 21 (Blackjack)"
-            if hand.is_bust:
-                return f"{cards} | {hand.best_value} (Bust)"
-            status = "Stand"
-            if hand.bet > self.settings.bet_amount:
-                status = f"{status} (Doubled)"
-            return f"{cards} | {hand.best_value} ({status})"
+        cards = ", ".join(render_card(c) for c in hand.cards)
+        if hand.surrendered:
+            return f"{cards} | Surrender"
+        if hand.is_blackjack:
+            return f"{cards} | 21 (Blackjack)"
+        if hand.is_bust:
+            return f"{cards} | {hand.best_value} (Bust)"
+        status = "Stand"
+        if hand.bet > base_bet:
+            status = "Double"
+        return f"{cards} | {hand.best_value} ({status})"
 
-        player_entries = [describe(hand) for hand in player_hands]
-        while len(player_entries) < 4:
-            player_entries.append("")
-        dealer_text = describe(dealer_hand)
-        return player_entries, dealer_text
+    def _format_dealer(self, hand: Hand) -> str:
+        suit_glyphs = {
+            "hearts": "♥",
+            "diamonds": "♦",
+            "clubs": "♣",
+            "spades": "♠",
+        }
+
+        def render_card(card: Card) -> str:
+            glyph = suit_glyphs.get(card.suit, "")
+            rank = "T" if card.rank == "10" else card.rank
+            return f"{rank}{glyph}" if glyph else rank
+
+        cards = ", ".join(render_card(c) for c in hand.cards)
+        if hand.is_blackjack:
+            return f"{cards} | 21 (Blackjack)"
+        if hand.is_bust:
+            return f"{cards} | {hand.best_value} (Bust)"
+        return f"{cards} | {hand.best_value} (Stand)"
 
     def run(self) -> None:
         allow_surrender = self.settings.surrender.lower() != "none"
@@ -358,16 +369,19 @@ class Simulator:
                 ):
                     dealer.play(dealer_hand, shoe)
 
-                player_entries, dealer_text = self._format_round(
-                    player_hands, dealer_hand
-                )
+                dealer_text = self._format_dealer(dealer_hand)
                 running_count = shoe.running_count
                 true_count = round(shoe.true_count, 1)
                 cards_dealt = shoe.cards_dealt
-                for hand in player_hands:
+                for hand_index, hand in enumerate(player_hands):
                     hand_counter += 1
                     hands_played += 1
                     total_hands += 1
+                    player_entries = ["", "", "", ""]
+                    slot = min(hand_index, len(player_entries) - 1)
+                    player_entries[slot] = self._format_hand(
+                        hand, self.settings.bet_amount
+                    )
                     hand_open_bankroll = player_settings.bankroll
                     change = self.resolve_hand(hand, dealer_hand, player_settings)
                     player_settings.bankroll += change
