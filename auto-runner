@@ -1,0 +1,7 @@
+watchmedo auto-restart \
+  --directory=blackjack \
+  --patterns="*.py" \
+  --recursive \
+  --ignore-patterns="*/__pycache__/*;*.pyc;*.pyo" \
+  --debounce-interval=0.5 \
+  -- python3 -m blackjack
