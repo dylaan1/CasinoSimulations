@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict
 import json
 
-from .hand import Hand
+from .game_hand import Hand
 
 Action = str  # 'hit', 'stand', 'double', 'split', 'surrender'
 
