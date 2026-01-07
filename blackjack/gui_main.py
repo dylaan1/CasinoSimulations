@@ -4,9 +4,9 @@ from matplotlib.figure import Figure
 import pandas as pd
 import sqlite3
 
-from .gui_data import ChartWindow
-from .settings import SimulationSettings
-from .simulator import Simulator
+from .gui_chart import ChartWindow
+from .sys_settings import SimulationSettings
+from .sys_simulator import Simulator
 
 
 class SimulatorGUI:
@@ -36,20 +36,20 @@ class SimulatorGUI:
         self.loaded_results_df = pd.DataFrame()
 
         # simulation setting variables
-        self.bankroll = tk.DoubleVar(value=1000)
+        self.bankroll = tk.DoubleVar(value=None)
         self.rounds = tk.IntVar(value=1)
-        self.hands_per_round = tk.IntVar(value=6)
-        self.bet = tk.DoubleVar(value=10)
-        self.decks = tk.IntVar(value=6)
-        self.payout = tk.StringVar(value="3:2")
-        self.dealer = tk.StringVar(value="H17")
+        self.hands_per_round = tk.IntVar(value=1)
+        self.bet = tk.DoubleVar()
+        self.decks = tk.IntVar(value=8)
+        self.payout = tk.StringVar(value="3 to 2")
+        self.dealer = tk.StringVar(value="Hit Soft 17s")
         self.das = tk.BooleanVar()
         self.split_aces_logic = tk.StringVar(value="Single")
-        self.surrender = tk.StringVar(value="Late")
+        self.surrender = tk.StringVar(value="None")
         self.das_switch_text = tk.StringVar()
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
-        self.penetration = tk.DoubleVar(value=0.75)
+        self.penetration = tk.DoubleVar(value=0.80)
         self.seed_id = tk.StringVar()
         self.test_mode = tk.BooleanVar()
         self.das.trace_add("write", lambda *args: self._update_das_switch_label())
@@ -126,11 +126,10 @@ class SimulatorGUI:
         ).pack(side=tk.RIGHT)
 
     def _build_settings_bar(self):
-        base_font = tkfont.nametofont("TkDefaultFont")
-        label_font = base_font.copy()
-        label_font.configure(size=max(label_font["size"] - 1, 9))
-        section_font = base_font.copy()
-        section_font.configure(size=max(section_font["size"] - 2, 9), weight="bold")
+        label_font = tkfont.Font(family="Verdana")
+        label_font.configure(size=max(label_font["size"] - 1, 11))
+        section_font = tkfont.Font(family="Verdana")
+        section_font.configure(size=max(section_font["size"] - 2, 12), weight="bold")
 
         self._update_das_switch_label()
 
@@ -163,17 +162,17 @@ class SimulatorGUI:
                     )
 
         sim_bins = [
-            ("Bankroll", lambda parent: ttk.Entry(parent, textvariable=self.bankroll, width=12)),
-            ("Bet", lambda parent: ttk.Entry(parent, textvariable=self.bet, width=12)),
+            ("Bankroll", lambda parent: ttk.Entry(parent, textvariable=self.bankroll, width=10)),
+            ("Bet", lambda parent: ttk.Entry(parent, textvariable=self.bet, width=6)),
             (
                 "Rounds",
-                lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.rounds, width=6),
+                lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.rounds, width=3),
             ),
             (
-                "Hands/Round",
-                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.hands_per_round, width=6),
+                "Hands",
+                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.hands_per_round, width=3),
             ),
-            ("Decks", lambda parent: tk.Spinbox(parent, from_=1, to=12, textvariable=self.decks, width=6)),
+            ("Decks", lambda parent: tk.Spinbox(parent, from_=1, to=12, textvariable=self.decks, width=3)),
             (
                 "Penetration",
                 lambda parent: tk.Spinbox(
@@ -182,7 +181,7 @@ class SimulatorGUI:
                     to=0.95,
                     increment=0.01,
                     textvariable=self.penetration,
-                    width=6,
+                    width=4,
                 ),
             ),
         ]
@@ -191,13 +190,13 @@ class SimulatorGUI:
             (
                 "Payout",
                 lambda parent: ttk.Combobox(
-                    parent, textvariable=self.payout, values=["3:2", "6:5"], state="readonly", width=4
+                    parent, textvariable=self.payout, values=["3 to 2", "6 to 5"], state="readonly", width=5
                 ),
             ),
             (
                 "Dealer 17 Logic",
                 lambda parent: ttk.Combobox(
-                    parent, textvariable=self.dealer, values=["H17", "S17"], state="readonly", width=4
+                    parent, textvariable=self.dealer, values=["Hit Soft 17s", "Stand Soft 17s"], state="readonly", width=10
                 ),
             ),
             (
@@ -211,7 +210,7 @@ class SimulatorGUI:
                     textvariable=self.split_aces_logic,
                     values=["Single", "Carnival"],
                     state="readonly",
-                    width=8,
+                    width=6,
                 ),
             ),
             (
@@ -219,9 +218,9 @@ class SimulatorGUI:
                 lambda parent: ttk.Combobox(
                     parent,
                     textvariable=self.surrender,
-                    values=["Early", "Late", "None"],
+                    values=["None", "Early", "Late"],
                     state="readonly",
-                    width=7,
+                    width=4,
                 ),
             ),
         ]
@@ -239,11 +238,10 @@ class SimulatorGUI:
             ),
             (
                 "Database",
-                lambda parent: ttk.Combobox(
+                lambda parent: ttk.Entry(
                     parent,
                     textvariable=self.database,
-                    values=[self.database.get()],
-                    state="readonly",
+                    state=tk.DISABLED,
                     width=max(18, len(self.database.get())),
                 ),
             ),
@@ -271,13 +269,15 @@ class SimulatorGUI:
             self.test_mode_label.grid_forget()
 
     def _build_chart_controls(self, parent: tk.Widget):
+        round_label_font = tkfont.Font(family="Verdana")
+        round_label_font.configure(size=max(round_label_font["size"] - 1, 12), weight="bold")
         controls = ttk.Frame(parent, padding=(10, 4))
         controls.grid(row=1, column=0, sticky="ew")
         for idx in range(8):
             controls.columnconfigure(idx, weight=0)
         controls.columnconfigure(2, weight=1)
 
-        ttk.Label(controls, text="ROUND VIEW", font=(None, 9, "bold")).grid(
+        ttk.Label(controls, text="ROUND VIEW", font=round_label_font).grid(
             row=0, column=0, sticky="w", padx=(0, 8)
         )
         ttk.Label(
@@ -381,16 +381,16 @@ class SimulatorGUI:
             self.data_tree.insert("", tk.END, values=values, tags=(tag,))
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
-        base_bg = parent.winfo_toplevel().cget("bg")
+        base_bg = "#fad7c1"
         frame = tk.Frame(parent, bg=base_bg, highlightthickness=0, bd=0)
         canvas = tk.Canvas(
             frame,
-            width=48,
-            height=26,
+            width=32,
+            height=20,
             highlightthickness=0,
             bg=base_bg,
-            bd=0,
-            relief=tk.FLAT,
+            bd=1,
+            relief=tk.SUNKEN,
         )
         canvas.pack()
 
