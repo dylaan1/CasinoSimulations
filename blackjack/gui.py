@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, font as tkfont
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import pandas as pd
+import sqlite3
 
 from .gui_data import DataWindow
 from .settings import SimulationSettings
@@ -24,17 +25,20 @@ class SimulatorGUI:
         self.root.rowconfigure(1, weight=2)
         self.root.columnconfigure(0, weight=1)
         self.sim = None
-        self.available_trials: list[int] = []
+        self.available_rounds: list[int] = []
 
         self.hover_annotation = None
         self._last_plots: list[tuple[int, pd.DataFrame]] = []
         self.results_df = pd.DataFrame()
         self.data_window: DataWindow | None = None
+        self.loaded_seed_id: str | None = None
+        self.loaded_bankroll_df = pd.DataFrame()
+        self.loaded_starting_bankroll: float | None = None
+        self.loaded_results_df = pd.DataFrame()
 
         # simulation setting variables
         self.bankroll = tk.DoubleVar(value=1000)
-        self.trials = tk.IntVar(value=1)
-        self.rounds_per_trial = tk.IntVar(value=1)
+        self.rounds = tk.IntVar(value=1)
         self.hands_per_round = tk.IntVar(value=6)
         self.bet = tk.DoubleVar(value=10)
         self.decks = tk.IntVar(value=6)
@@ -47,12 +51,12 @@ class SimulatorGUI:
         self.strategy_file = tk.StringVar(value="BJ_basicStrategy.json")
         self.database = tk.StringVar(value="simulation.db")
         self.penetration = tk.DoubleVar(value=0.75)
-        self.seed = tk.StringVar()
+        self.seed_id = tk.StringVar()
         self.test_mode = tk.BooleanVar()
         self.das.trace_add("write", lambda *args: self._update_das_switch_label())
         self.test_mode.trace_add("write", lambda *args: self._update_test_mode_label())
 
-        self.trial_filter = tk.StringVar(value="all")
+        self.round_filter = tk.StringVar(value="all")
 
         self._build_widgets()
         self._update_test_mode_label()
@@ -63,7 +67,7 @@ class SimulatorGUI:
         self.top_panel.rowconfigure(2, weight=1)
         self.top_panel.columnconfigure(0, weight=1)
 
-        fig = Figure(figsize=(6, 4))
+        fig = Figure(figsize=(7.5, 4.5), dpi=100, constrained_layout=True)
         self.ax = fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(fig, master=self.top_panel)
         self.test_mode_label = tk.Label(
@@ -101,7 +105,14 @@ class SimulatorGUI:
 
         footer = tk.Frame(self.bottom_panel)
         footer.pack(fill=tk.X)
-        ttk.Button(footer, text="Seed", command=self.open_settings).pack(side=tk.LEFT)
+        seed_frame = ttk.Frame(footer)
+        seed_frame.pack(side=tk.LEFT)
+        ttk.Label(seed_frame, text="Seed").pack(side=tk.LEFT, padx=(0, 6))
+        seed_entry = ttk.Entry(seed_frame, textvariable=self.seed_id, width=12)
+        seed_entry.pack(side=tk.LEFT)
+        ttk.Button(seed_frame, text="Choose Seed", command=self.open_seed_manager).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
         tk.Button(
             footer,
             text="Exit",
@@ -152,10 +163,9 @@ class SimulatorGUI:
         sim_bins = [
             ("Bankroll", lambda parent: ttk.Entry(parent, textvariable=self.bankroll, width=12)),
             ("Bet", lambda parent: ttk.Entry(parent, textvariable=self.bet, width=12)),
-            ("Trials", lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.trials, width=6)),
             (
-                "Rounds/Trial",
-                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.rounds_per_trial, width=6),
+                "Rounds",
+                lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.rounds, width=6),
             ),
             (
                 "Hands/Round",
@@ -265,19 +275,19 @@ class SimulatorGUI:
             controls.columnconfigure(idx, weight=0)
         controls.columnconfigure(2, weight=1)
 
-        ttk.Label(controls, text="TRIAL VIEW", font=(None, 9, "bold")).grid(
+        ttk.Label(controls, text="ROUND VIEW", font=(None, 9, "bold")).grid(
             row=0, column=0, sticky="w", padx=(0, 8)
         )
         ttk.Label(
             controls, text="Enter 'all' or a list/range (e.g. 1,3-5):"
         ).grid(row=0, column=1, sticky="w")
-        entry = ttk.Entry(controls, textvariable=self.trial_filter, width=20)
+        entry = ttk.Entry(controls, textvariable=self.round_filter, width=20)
         entry.grid(row=0, column=2, sticky="w", padx=(6, 6))
         entry.bind("<Return>", lambda event: self.update_graph())
         ttk.Button(controls, text="Apply", command=self.update_graph).grid(
             row=0, column=3, padx=(0, 6)
         )
-        ttk.Button(controls, text="Show All", command=self._show_all_trials).grid(
+        ttk.Button(controls, text="Show All", command=self._show_all_rounds).grid(
             row=0, column=4, padx=(0, 12)
         )
         self.run_btn = ttk.Button(controls, text="Run", command=self.run_simulation)
@@ -324,8 +334,7 @@ class SimulatorGUI:
 
     def _gather_settings(self) -> SimulationSettings:
         return SimulationSettings(
-            trials=self.trials.get(),
-            rounds_per_trial=self.rounds_per_trial.get(),
+            rounds=self.rounds.get(),
             hands_per_round=self.hands_per_round.get(),
             bankroll=float(self.bankroll.get()),
             blackjack_payout=1.5 if self.payout.get() == "3:2" else 1.2,
@@ -338,28 +347,63 @@ class SimulatorGUI:
             penetration=float(self.penetration.get()),
             strategy_file=self.strategy_file.get(),
             database=self.database.get(),
-            seed=int(self.seed.get()) if self.seed.get() else None,
             test_mode=self.test_mode.get(),
         )
 
-    def open_settings(self):
-        if hasattr(self, "settings_win") and self.settings_win.winfo_exists():
-            self.settings_win.lift()
+    def open_seed_manager(self):
+        if hasattr(self, "seed_win") and self.seed_win.winfo_exists():
+            self.seed_win.lift()
             return
-        self.settings_win = tk.Toplevel(self.root)
-        self.settings_win.title("Seed")
-        frame = ttk.Frame(self.settings_win, padding=10)
+        self.seed_win = tk.Toplevel(self.root)
+        self.seed_win.title("Seeds")
+        frame = ttk.Frame(self.seed_win, padding=10)
         frame.pack(fill=tk.BOTH, expand=True)
+        frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="Seed").grid(row=0, column=0, sticky="e", padx=(0, 6))
-        ttk.Entry(frame, textvariable=self.seed, width=20).grid(row=0, column=1, sticky="w")
-        ttk.Button(frame, text="Close", command=self.settings_win.destroy).grid(
-            row=1, column=0, columnspan=2, pady=(10, 0)
+        ttk.Label(frame, text="Seed ID").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Entry(frame, textvariable=self.seed_id, width=18).grid(
+            row=0, column=1, sticky="w", pady=(0, 6)
         )
+
+        self.seed_tree = ttk.Treeview(
+            frame,
+            columns=("seed_id", "created_at", "rounds", "hands", "pl", "favorite"),
+            show="headings",
+            height=8,
+        )
+        for col, heading, width in [
+            ("seed_id", "Seed ID", 90),
+            ("created_at", "Saved At", 150),
+            ("rounds", "Rounds", 70),
+            ("hands", "Hands", 70),
+            ("pl", "Total P/L", 90),
+            ("favorite", "Favorite", 70),
+        ]:
+            self.seed_tree.heading(col, text=heading)
+            self.seed_tree.column(col, width=width, anchor=tk.W)
+        self.seed_tree.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        frame.rowconfigure(1, weight=1)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Button(btn_frame, text="Run Seed", command=self.run_seed).pack(side=tk.LEFT)
+        ttk.Button(btn_frame, text="Toggle Favorite", command=self.toggle_seed_favorite).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(btn_frame, text="Close", command=self.seed_win.destroy).pack(
+            side=tk.RIGHT
+        )
+
+        self.seed_tree.bind("<Double-1>", lambda *_: self._select_seed_from_tree())
+        self._refresh_seed_tree()
 
     def run_simulation(self):
         if self.sim:
             self.sim.close()
+        self.loaded_seed_id = None
+        self.loaded_bankroll_df = pd.DataFrame()
+        self.loaded_starting_bankroll = None
+        self.loaded_results_df = pd.DataFrame()
         settings = self._gather_settings()
         self.sim = Simulator(settings)
         try:
@@ -374,8 +418,8 @@ class SimulatorGUI:
                 f"Details: {exc}",
             )
             return
-        self.available_trials = list(range(1, self.trials.get() + 1))
-        self.trial_filter.set("all")
+        self.available_rounds = list(range(1, self.rounds.get() + 1))
+        self.round_filter.set("all")
         self.update_graph()
         self.update_table()
         if not self.sim.results_available:
@@ -384,8 +428,8 @@ class SimulatorGUI:
             )
             self._clear_plot()
             self._clear_table()
-            self.available_trials = []
-            self.trial_filter.set("all")
+            self.available_rounds = []
+            self.round_filter.set("all")
             self.save_btn.config(state=tk.DISABLED)
             self.discard_btn.config(state=tk.DISABLED)
             return
@@ -396,32 +440,47 @@ class SimulatorGUI:
         self.discard_btn.config(state=tk.NORMAL)
 
     def update_graph(self):
-        if not self.sim:
+        if self.sim:
+            df = pd.read_sql_query(
+                """
+                SELECT round_number, hand, bankroll
+                FROM temp_bankroll
+                ORDER BY round_number, hand
+                """,
+                self.sim.conn,
+            )
+            starting_bankroll = self.bankroll.get()
+        elif not self.loaded_bankroll_df.empty:
+            df = self.loaded_bankroll_df.copy()
+            starting_bankroll = self.loaded_starting_bankroll or 0.0
+        else:
             self._clear_plot()
             return
-        df = pd.read_sql_query(
-            "SELECT trial, hand, bankroll FROM temp_bankroll ORDER BY trial, hand",
-            self.sim.conn,
-        )
+
         if df.empty:
             self._clear_plot()
             return
 
-        selected_trials = self._parse_trial_selection()
-        if not selected_trials:
-            messagebox.showwarning("Invalid Selection", "No valid trials were selected.")
-            self._show_all_trials()
+        selected_rounds = self._parse_round_selection()
+        if not selected_rounds:
+            messagebox.showwarning("Invalid Selection", "No valid rounds were selected.")
+            self._show_all_rounds()
             return
 
-        df = df[df["trial"].isin(selected_trials)].copy()
+        df = df[df["round_number"].isin(selected_rounds)].copy()
         if df.empty:
             self._clear_plot()
             return
 
-        df["pl"] = df["bankroll"] - self.bankroll.get()
+        self._plot_bankroll(df, starting_bankroll, selected_rounds)
+
+    def _plot_bankroll(
+        self, df: pd.DataFrame, starting_bankroll: float, selected_rounds: list[int]
+    ):
+        df["pl"] = df["bankroll"] - starting_bankroll
 
         self.ax.clear()
-        self.ax.set_xlabel("# of Hands Played")
+        self.ax.set_xlabel("Hand #")
         self.ax.set_ylabel("P/L ($)")
         self.ax.set_title("Total Profit/Loss", fontname="Verdana", fontsize=18, fontweight="bold")
         self.ax.axhline(0, color="gray", linewidth=0.5)
@@ -431,30 +490,37 @@ class SimulatorGUI:
         self._last_plots = []
         xmin = 0
         xmax = max(100, df["hand"].max())
-        ymin = min(df["pl"].min(), -self.bankroll.get())
-        ymax = max(df["pl"].max(), self.bankroll.get())
+        ymin = min(df["pl"].min(), -starting_bankroll)
+        ymax = max(df["pl"].max(), starting_bankroll)
 
-        for trial in sorted(selected_trials):
-            trial_df = df[df["trial"] == trial]
-            if trial_df.empty:
+        for round_number in sorted(selected_rounds):
+            round_df = df[df["round_number"] == round_number]
+            if round_df.empty:
                 continue
             color = self.ax._get_lines.get_next_color()
-            self.ax.plot(trial_df["hand"], trial_df["pl"], label=f"Trial {trial}", color=color)
-            self._last_plots.append((trial, trial_df[["hand", "pl"]].reset_index(drop=True)))
+            self.ax.plot(
+                round_df["hand"],
+                round_df["pl"],
+                label=f"Round {round_number}",
+                color=color,
+            )
+            self._last_plots.append(
+                (round_number, round_df[["hand", "pl"]].reset_index(drop=True))
+            )
 
         self.ax.set_xlim(xmin, xmax)
         self.ax.set_ylim(ymin, ymax)
-        if len(selected_trials) > 1:
+        if len(selected_rounds) > 1:
             self.ax.legend()
 
-        summary_trial = max(selected_trials)
-        summary_df = df[df["trial"] == summary_trial]
+        summary_round = max(selected_rounds)
+        summary_df = df[df["round_number"] == summary_round]
         if not summary_df.empty:
             hands_played = int(summary_df["hand"].max())
             ending_bankroll = float(summary_df["bankroll"].iloc[-1])
             final_pl = float(summary_df["pl"].iloc[-1])
             summary_text = (
-                f"Trial: {summary_trial}\n"
+                f"Round: {summary_round}\n"
                 f"Hands Played: {hands_played}\n"
                 f"Ending Bankroll: ${ending_bankroll:,.2f}\n"
                 f"Final P/L: ${final_pl:,.2f}"
@@ -470,7 +536,7 @@ class SimulatorGUI:
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.85),
             )
 
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     def _clear_plot(self):
         self.ax.clear()
@@ -484,6 +550,9 @@ class SimulatorGUI:
         self.view_data_btn.state(["disabled"])
         if self.data_window and self.data_window.is_open():
             self.data_window.close()
+        self.loaded_seed_id = None
+        self.loaded_bankroll_df = pd.DataFrame()
+        self.loaded_starting_bankroll = None
 
     def open_data_window(self):
         if self.results_df.empty:
@@ -496,10 +565,10 @@ class SimulatorGUI:
             self.root, self.results_df, on_close=lambda: setattr(self, "data_window", None)
         )
 
-    def _parse_trial_selection(self) -> list[int]:
-        raw = self.trial_filter.get().strip().lower()
+    def _parse_round_selection(self) -> list[int]:
+        raw = self.round_filter.get().strip().lower()
         if not raw or raw == "all":
-            return self.available_trials
+            return self.available_rounds
 
         selected: set[int] = set()
         for part in raw.replace(" ", "").split(","):
@@ -520,10 +589,10 @@ class SimulatorGUI:
                 except ValueError:
                     continue
 
-        return [t for t in sorted(selected) if t in self.available_trials]
+        return [t for t in sorted(selected) if t in self.available_rounds]
 
-    def _show_all_trials(self):
-        self.trial_filter.set("all")
+    def _show_all_rounds(self):
+        self.round_filter.set("all")
         self.update_graph()
 
     def _on_hover(self, event):
@@ -537,17 +606,17 @@ class SimulatorGUI:
             return
 
         closest = None
-        for trial, data in self._last_plots:
+        for round_number, data in self._last_plots:
             idx = (data["hand"] - event.xdata).abs().idxmin()
             point = data.loc[idx]
             if closest is None or abs(point["hand"] - event.xdata) < abs(closest[1]["hand"] - event.xdata):
-                closest = (trial, point)
+                closest = (round_number, point)
 
         if not closest:
             return
 
-        trial, point = closest
-        text = f"Trial {trial}: Hand {int(point['hand'])}, P/L {point['pl']:.2f}"
+        round_number, point = closest
+        text = f"Round {round_number}: Hand {int(point['hand'])}, P/L {point['pl']:.2f}"
 
         if not self.hover_annotation:
             self.hover_annotation = self.ax.annotate(
@@ -565,67 +634,280 @@ class SimulatorGUI:
         self.canvas.draw_idle()
 
     def update_table(self):
-        if not self.sim:
+        if self.sim:
+            df = pd.read_sql_query(
+                """
+                SELECT
+                    round_number,
+                    hands,
+                    wager,
+                    open_bankroll,
+                    close_bankroll,
+                    player_hand_a,
+                    player_hand_b,
+                    player_hand_c,
+                    player_hand_d,
+                    dealer_cards,
+                    cards_dealt,
+                    running_count,
+                    true_count
+                FROM temp_results
+                ORDER BY round_number, hands
+                """,
+                self.sim.conn,
+            )
+        elif not self.loaded_results_df.empty:
+            df = self.loaded_results_df.copy()
+        else:
             self._clear_table()
             return
-        df = pd.read_sql_query(
-            """
-            SELECT
-                trial,
-                round_number,
-                hands,
-                wager,
-                open_bankroll,
-                close_bankroll,
-                split_aces_logic,
-                player_hand_a,
-                player_hand_b,
-                player_hand_c,
-                player_hand_d,
-                player_cards,
-                dealer_cards,
-                cards_dealt,
-                running_count,
-                true_count
-            FROM temp_results
-            ORDER BY trial, round_number, hands
-            """,
-            self.sim.conn,
-        )
 
         if df.empty:
             self._clear_table()
             return
 
-        ordered_cols = [
-            "trial",
-            "round_number",
-            "hands",
-            "wager",
-            "open_bankroll",
-            "close_bankroll",
-            "split_aces_logic",
-            "player_hand_a",
-            "player_hand_b",
-            "player_hand_c",
-            "player_hand_d",
-            "player_cards",
-            "dealer_cards",
-            "cards_dealt",
-            "running_count",
-            "true_count",
+        df["true_count"] = df["true_count"].round(1)
+        df.rename(
+            columns={
+                "round_number": "Round #",
+                "hands": "Hand #",
+                "wager": "Wager",
+                "open_bankroll": "Open Bankroll",
+                "close_bankroll": "Close Bankroll",
+                "player_hand_a": "Player Hand A",
+                "player_hand_b": "Player Hand B",
+                "player_hand_c": "Player Hand C",
+                "player_hand_d": "Player Hand D",
+                "dealer_cards": "Dealer Cards",
+                "cards_dealt": "Cards Dealt",
+                "running_count": "Running Count",
+                "true_count": "True Count",
+            },
+            inplace=True,
+        )
+        df["True Count"] = df["True Count"].map(lambda val: f"{val:.1f}")
+        self.results_df = df[
+            [
+                "Round #",
+                "Hand #",
+                "Wager",
+                "Open Bankroll",
+                "Close Bankroll",
+                "Player Hand A",
+                "Player Hand B",
+                "Player Hand C",
+                "Player Hand D",
+                "Dealer Cards",
+                "Cards Dealt",
+                "Running Count",
+                "True Count",
+            ]
         ]
-        self.results_df = df[ordered_cols]
         self.view_data_btn.state(["!disabled"])
         if self.data_window and self.data_window.is_open():
             self.data_window.update_dataframe(self.results_df)
 
-    def save_results(self):
+    def _refresh_seed_tree(self):
+        if not hasattr(self, "seed_tree"):
+            return
+        for item in self.seed_tree.get_children():
+            self.seed_tree.delete(item)
+        for seed in self._fetch_saved_seeds():
+            favorite = "★" if seed["favorite"] else ""
+            self.seed_tree.insert(
+                "",
+                tk.END,
+                values=(
+                    seed["seed_id"],
+                    seed["created_at"],
+                    seed["total_rounds"],
+                    seed["total_hands"],
+                    f"${seed['total_pl']:,.2f}",
+                    favorite,
+                ),
+            )
+
+    def _fetch_saved_seeds(self):
+        db_path = self.database.get()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        self._ensure_seed_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT seed_id, created_at, total_rounds, total_hands, total_pl, favorite
+            FROM saved_seeds
+            ORDER BY created_at DESC
+            """
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def _select_seed_from_tree(self):
+        selection = self.seed_tree.selection()
+        if not selection:
+            return
+        values = self.seed_tree.item(selection[0], "values")
+        if values:
+            self.seed_id.set(values[0])
+
+    def toggle_seed_favorite(self):
+        selection = self.seed_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Select a seed to toggle favorite.")
+            return
+        seed_id = self.seed_tree.item(selection[0], "values")[0]
+        db_path = self.database.get()
+        conn = sqlite3.connect(db_path)
+        self._ensure_seed_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE saved_seeds SET favorite = CASE favorite WHEN 1 THEN 0 ELSE 1 END WHERE seed_id = ?",
+            (seed_id,),
+        )
+        conn.commit()
+        conn.close()
+        self._refresh_seed_tree()
+
+    def run_seed(self):
+        seed_id = self.seed_id.get().strip()
+        if not seed_id:
+            messagebox.showwarning("No Seed", "Enter a seed ID to run.")
+            return
+        self.load_seed(seed_id)
+        if hasattr(self, "seed_win") and self.seed_win.winfo_exists():
+            self.seed_win.destroy()
+
+    def load_seed(self, seed_id: str):
+        db_path = self.database.get()
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        self._ensure_seed_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT seed_id, starting_bankroll
+            FROM saved_seeds
+            WHERE seed_id = ?
+            """,
+            (seed_id,),
+        )
+        seed_row = cur.fetchone()
+        if not seed_row:
+            conn.close()
+            messagebox.showwarning("Missing Seed", "Seed ID not found in saved seeds.")
+            return
+
+        bankroll_df = pd.read_sql_query(
+            """
+            SELECT round_number, hand, bankroll
+            FROM saved_seed_bankroll
+            WHERE seed_id = ?
+            ORDER BY round_number, hand
+            """,
+            conn,
+            params=(seed_id,),
+        )
+        results_df = pd.read_sql_query(
+            """
+            SELECT
+                round_number,
+                hand AS hands,
+                wager,
+                open_bankroll,
+                close_bankroll,
+                player_hand_a,
+                player_hand_b,
+                player_hand_c,
+                player_hand_d,
+                dealer_cards,
+                cards_dealt,
+                running_count,
+                true_count
+            FROM saved_seed_results
+            WHERE seed_id = ?
+            ORDER BY round_number, hand
+            """,
+            conn,
+            params=(seed_id,),
+        )
+        conn.close()
+
+        if bankroll_df.empty or results_df.empty:
+            messagebox.showwarning("No Data", "No saved data found for this seed.")
+            return
+
         if self.sim:
-            self.sim.save_results()
             self.sim.close()
             self.sim = None
-            messagebox.showinfo("Saved", "Results saved")
+        self.loaded_seed_id = seed_id
+        self.loaded_bankroll_df = bankroll_df
+        self.loaded_starting_bankroll = float(seed_row["starting_bankroll"])
+        self.loaded_results_df = results_df
+
+        self.available_rounds = sorted(bankroll_df["round_number"].unique().tolist())
+        self.round_filter.set("all")
+        self.update_graph()
+        self.update_table()
+        self.save_btn.config(state=tk.DISABLED)
+        self.discard_btn.config(state=tk.DISABLED)
+
+    def _ensure_seed_tables(self, conn: sqlite3.Connection):
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seeds (
+                seed_id TEXT PRIMARY KEY,
+                created_at TEXT,
+                total_rounds INTEGER,
+                total_hands INTEGER,
+                total_pl REAL,
+                starting_bankroll REAL,
+                favorite INTEGER DEFAULT 0
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seed_results (
+                seed_id TEXT,
+                round_number INTEGER,
+                hand INTEGER,
+                wager REAL,
+                open_bankroll REAL,
+                close_bankroll REAL,
+                player_hand_a TEXT,
+                player_hand_b TEXT,
+                player_hand_c TEXT,
+                player_hand_d TEXT,
+                dealer_cards TEXT,
+                cards_dealt INTEGER,
+                running_count INTEGER,
+                true_count REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS saved_seed_bankroll (
+                seed_id TEXT,
+                round_number INTEGER,
+                hand INTEGER,
+                bankroll REAL
+            )
+            """
+        )
+        conn.commit()
+
+    def save_results(self):
+        if self.sim:
+            seed_id = self.sim.save_results()
+            self.sim.close()
+            self.sim = None
+            self.seed_id.set(seed_id)
+            self._refresh_seed_tree()
+            messagebox.showinfo("Saved", f"Results saved to Seed {seed_id}")
             self.save_btn.config(state=tk.DISABLED)
             self.discard_btn.config(state=tk.DISABLED)
             self.update_table()
@@ -640,8 +922,8 @@ class SimulatorGUI:
             self.discard_btn.config(state=tk.DISABLED)
             self.update_table()
             self._clear_plot()
-            self.available_trials = []
-            self.trial_filter.set("all")
+            self.available_rounds = []
+            self.round_filter.set("all")
 
     def has_unsaved_data(self) -> bool:
         if not self.sim:

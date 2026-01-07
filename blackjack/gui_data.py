@@ -17,7 +17,7 @@ class DataWindow:
         container.rowconfigure(0, weight=1)
         container.columnconfigure(0, weight=1)
 
-        self.table = ttk.Treeview(container, show="headings", height=20)
+        self.table = tk.Text(container, wrap="none", height=20)
         self.table.grid(row=0, column=0, sticky="nsew")
 
         v_scroll = ttk.Scrollbar(container, orient="vertical", command=self.table.yview)
@@ -40,20 +40,73 @@ class DataWindow:
     def update_dataframe(self, dataframe: pd.DataFrame):
         if dataframe is None:
             dataframe = pd.DataFrame()
-        self.table.delete(*self.table.get_children())
+        self.table.configure(state=tk.NORMAL)
+        self.table.delete("1.0", tk.END)
         if dataframe.empty:
-            self.table["columns"] = []
+            self.table.configure(state=tk.DISABLED)
             return
 
         columns = list(dataframe.columns)
-        self.table["columns"] = columns
-        font = tkfont.nametofont("TkDefaultFont")
-        for col in columns:
-            header = col.replace("_", " ").upper()
-            values = [header] + [str(v) for v in dataframe[col].tolist()]
-            width = max(font.measure(v) for v in values) + 16
-            self.table.heading(col, text=header)
-            self.table.column(col, width=width, stretch=True, anchor=tk.W)
+        font = tkfont.nametofont("TkFixedFont")
+        self.table.configure(font=font)
 
+        col_widths = {}
+        for col in columns:
+            values = [str(col)] + [str(v) for v in dataframe[col].tolist()]
+            col_widths[col] = max(len(v) for v in values) + 2
+
+        header_line = ""
+        col_positions = []
+        for col in columns:
+            start = len(header_line)
+            header_line += str(col).ljust(col_widths[col])
+            col_positions.append((col, start))
+        header_line = header_line.rstrip()
+        self.table.insert(tk.END, header_line + "\n")
+        self.table.insert(tk.END, "-" * len(header_line) + "\n")
+
+        self.table.tag_configure("dealer_up", foreground="red")
+        self.table.tag_configure("player_initial", foreground="blue")
+
+        line_number = 3
         for _, row in dataframe.iterrows():
-            self.table.insert("", tk.END, values=[row[col] for col in columns])
+            line = ""
+            for col in columns:
+                cell = "" if pd.isna(row[col]) else str(row[col])
+                line += cell.ljust(col_widths[col])
+            line = line.rstrip()
+            self.table.insert(tk.END, line + "\n")
+
+            for col, start in col_positions:
+                cell = "" if pd.isna(row[col]) else str(row[col])
+                if not cell:
+                    continue
+                if col == "Dealer Cards":
+                    up_card = self._extract_cards(cell, 1)
+                    if up_card:
+                        offset = cell.find(up_card[0])
+                        if offset >= 0:
+                            self._tag_range(
+                                line_number, start + offset, len(up_card[0]), "dealer_up"
+                            )
+                if col.startswith("Player Hand"):
+                    cards = self._extract_cards(cell, 2)
+                    for card in cards:
+                        offset = cell.find(card)
+                        if offset >= 0:
+                            self._tag_range(
+                                line_number, start + offset, len(card), "player_initial"
+                            )
+            line_number += 1
+
+        self.table.configure(state=tk.DISABLED)
+
+    def _extract_cards(self, text: str, count: int) -> list[str]:
+        card_section = text.split("|", 1)[0].strip()
+        cards = [c.strip() for c in card_section.split(",") if c.strip()]
+        return cards[:count]
+
+    def _tag_range(self, line_number: int, col_start: int, length: int, tag: str) -> None:
+        start_index = f"{line_number}.{col_start}"
+        end_index = f"{line_number}.{col_start + length}"
+        self.table.tag_add(tag, start_index, end_index)

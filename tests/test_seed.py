@@ -2,13 +2,12 @@ from blackjack.simulator import Simulator
 from blackjack.settings import SimulationSettings
 
 
-def test_simulator_seed_reproducible(tmp_path):
+def test_save_results_creates_seed_snapshot(tmp_path):
     strategy_file = tmp_path / "strategy.json"
     strategy_file.write_text("{}")
     settings = SimulationSettings(
-        trials=1,
-        rounds_per_trial=1,
-        hands_per_round=5,
+        rounds=1,
+        hands_per_round=3,
         bankroll=10,
         blackjack_payout=1.5,
         double_after_split=True,
@@ -19,21 +18,21 @@ def test_simulator_seed_reproducible(tmp_path):
         penetration=0.75,
         strategy_file=str(strategy_file),
         database=":memory:",
-        seed=42,
     )
-    sim1 = Simulator(settings)
-    sim1.run()
-    cur1 = sim1.conn.cursor()
-    cur1.execute("SELECT card, count FROM temp_card_distribution ORDER BY card")
-    dist1 = cur1.fetchall()
-    sim1.close()
+    sim = Simulator(settings)
+    sim.run()
+    seed_id = sim.save_results()
+    cur = sim.conn.cursor()
 
-    sim2 = Simulator(settings)
-    sim2.run()
-    cur2 = sim2.conn.cursor()
-    cur2.execute("SELECT card, count FROM temp_card_distribution ORDER BY card")
-    dist2 = cur2.fetchall()
-    sim2.close()
+    cur.execute("SELECT seed_id, total_rounds, total_hands FROM saved_seeds WHERE seed_id = ?", (seed_id,))
+    row = cur.fetchone()
+    assert row is not None
+    assert row[0] == seed_id
+    assert row[1] == 1
+    assert row[2] > 0
 
-    assert dist1 == dist2
-
+    cur.execute("SELECT COUNT(*) FROM saved_seed_results WHERE seed_id = ?", (seed_id,))
+    assert cur.fetchone()[0] > 0
+    cur.execute("SELECT COUNT(*) FROM saved_seed_bankroll WHERE seed_id = ?", (seed_id,))
+    assert cur.fetchone()[0] > 0
+    sim.close()

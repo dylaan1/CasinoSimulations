@@ -6,8 +6,7 @@ DEFAULT_STRATEGY_FILE = Path(__file__).resolve().parent.parent / "BJ_basicStrate
 
 @dataclass
 class SimulationSettings:
-    trials: int = 100
-    rounds_per_trial: int = 1
+    rounds: int = 100
     hands_per_round: int = 100
     bankroll: float = 1000.0
     blackjack_payout: float = 1.5
@@ -20,5 +19,4 @@ class SimulationSettings:
     penetration: float = 0.75
     strategy_file: str = str(DEFAULT_STRATEGY_FILE)
     database: str = "simulation.db"
-    seed: int | None = None
     test_mode: bool = False
