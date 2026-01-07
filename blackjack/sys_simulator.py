@@ -10,12 +10,12 @@ from importlib import import_module
 
 from typing import List
 
-from .settings import SimulationSettings
-from .cards import Shoe, Card
-from .player import Player, PlayerSettings
-from .dealer import Dealer
-from .strategy import BasicStrategy
-from .hand import Hand
+from .sys_settings import SimulationSettings
+from .game_cards import Shoe, Card
+from .game_player import Player, PlayerSettings
+from .game_dealer import Dealer
+from .sys_strategy import BasicStrategy
+from .game_hand import Hand
 
 
 # Mapping of permanent tables to their temporary counterparts
