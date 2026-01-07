@@ -104,33 +104,6 @@ class Simulator:
             )
             """
         )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS temp_bankroll (
-                round_number INTEGER,
-                hand INTEGER,
-                bankroll REAL
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS temp_summary (
-                round_number INTEGER,
-                hands_played INTEGER,
-                bankroll REAL
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS temp_card_distribution (
-                round_number INTEGER,
-                card TEXT,
-                count INTEGER
-            )
-            """
-        )
 
         cur.execute(
             """
@@ -159,33 +132,7 @@ class Simulator:
             )
             """
         )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS temp_results (
-                sim INTEGER,
-                round_number INTEGER,
-                decks INTEGER,
-                penetration REAL,
-                payout TEXT,
-                soft17 TEXT,
-                das INTEGER,
-                rsa INTEGER,
-                surrender TEXT,
-                hands INTEGER,
-                wager REAL,
-                open_bankroll REAL,
-                close_bankroll REAL,
-                player_hand_a TEXT,
-                player_hand_b TEXT,
-                player_hand_c TEXT,
-                player_hand_d TEXT,
-                dealer_cards TEXT,
-                running_count INTEGER,
-                true_count REAL,
-                cards_dealt INTEGER
-            )
-            """
-        )
+        self._create_temp_tables(cur)
 
         for table in ("results", "temp_results"):
             self._ensure_column(table, "round_number", "INTEGER")
@@ -258,8 +205,65 @@ class Simulator:
     def _reset_temp_tables(self) -> None:
         cur = self.conn.cursor()
         for _, temp in TABLE_PAIRS:
-            cur.execute(f"DELETE FROM {temp}")
+            cur.execute(f"DROP TABLE IF EXISTS {temp}")
+        self._create_temp_tables(cur)
         self.conn.commit()
+
+    def _create_temp_tables(self, cur: sqlite3.Cursor) -> None:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temp_bankroll (
+                round_number INTEGER,
+                hand INTEGER,
+                bankroll REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temp_summary (
+                round_number INTEGER,
+                hands_played INTEGER,
+                bankroll REAL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temp_card_distribution (
+                round_number INTEGER,
+                card TEXT,
+                count INTEGER
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS temp_results (
+                sim INTEGER,
+                round_number INTEGER,
+                decks INTEGER,
+                penetration REAL,
+                payout TEXT,
+                soft17 TEXT,
+                das INTEGER,
+                rsa INTEGER,
+                surrender TEXT,
+                hands INTEGER,
+                wager REAL,
+                open_bankroll REAL,
+                close_bankroll REAL,
+                player_hand_a TEXT,
+                player_hand_b TEXT,
+                player_hand_c TEXT,
+                player_hand_d TEXT,
+                dealer_cards TEXT,
+                running_count INTEGER,
+                true_count REAL,
+                cards_dealt INTEGER
+            )
+            """
+        )
 
     def _format_round(
         self, player_hands: List[Hand], dealer_hand: Hand
