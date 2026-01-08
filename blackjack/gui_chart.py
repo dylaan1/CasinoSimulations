@@ -48,7 +48,7 @@ class ChartWindow:
         ttk.Label(control_inner, text="ROUND VIEW", font=label_font).grid(
             row=0, column=0, padx=(0, 8)
         )
-        self.round_combo = ttk.Combobox(
+        self.round_combo = ttk.Spinbox(
             control_inner,
             textvariable=self.round_var,
             values=self._round_values,
