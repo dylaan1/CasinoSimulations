@@ -36,10 +36,10 @@ class SimulatorGUI:
         self.loaded_results_df = pd.DataFrame()
 
         # simulation setting variables
-        self.bankroll = tk.DoubleVar(value=None)
+        self.bankroll = tk.DoubleVar(value=5000)
         self.rounds = tk.IntVar(value=1)
         self.hands_per_round = tk.IntVar(value=1)
-        self.bet = tk.DoubleVar()
+        self.bet = tk.DoubleVar(value=100)
         self.decks = tk.IntVar(value=8)
         self.payout = tk.StringVar(value="3 to 2")
         self.dealer = tk.StringVar(value="Hit Soft 17s")
@@ -77,30 +77,25 @@ class SimulatorGUI:
         self.header_frame.grid(row=0, column=0, sticky="ew", pady=(8, 4))
         self.header_frame.columnconfigure(0, weight=1)
         title_font = tkfont.Font(family="Verdana", size=20, weight="bold")
-        subtitle_font = tkfont.Font(family="Verdana", size=12)
+        header_font = tkfont.Font(family="Verdana", size=14, weight="bold")
         tk.Label(
             self.header_frame,
             text="CasinoSimulations™ Blackjack",
             font=title_font,
         ).grid(row=0, column=0)
-        tk.Label(
-            self.header_frame,
-            text="DataFrame",
-            font=subtitle_font,
-        ).grid(row=1, column=0)
         self.test_mode_label = tk.Label(
             self.header_frame,
             text="The Simulator is currently in 'Test Mode'",
             fg="red",
         )
 
-        data_frame = ttk.Frame(self.top_panel, padding=(20, 10))
-        data_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=6)
-        data_frame.rowconfigure(0, weight=1)
-        data_frame.columnconfigure(0, weight=1)
-        self._build_data_table(data_frame)
+        self.data_frame = ttk.Frame(self.top_panel, padding=(20, 10), relief="groove")
+        self.data_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=8)
+        self.data_frame.rowconfigure(0, weight=1)
+        self.data_frame.columnconfigure(0, weight=1)    
+        self._build_data_table(self.data_frame)
 
-        self.bottom_panel = tk.Frame(self.root, padx=10, pady=10)
+        self.bottom_panel = tk.Frame(self.root, padx=10, pady=8)
         self.bottom_panel.grid(row=1, column=0, sticky="nsew")
         self.bottom_panel.rowconfigure(0, weight=1)
         self.bottom_panel.columnconfigure(0, weight=1)
@@ -114,7 +109,7 @@ class SimulatorGUI:
         settings_title = tk.Label(
             self.settings_bin,
             text="Settings",
-            font=tkfont.Font(family="Verdana", size=14, weight="bold"),
+            font=header_font,
         )
         settings_title.grid(row=0, column=0, pady=(0, 6))
 
@@ -151,7 +146,7 @@ class SimulatorGUI:
         stats_title = tk.Label(
             self.stats_bin,
             text="Statistics",
-            font=tkfont.Font(family="Verdana", size=14, weight="bold"),
+            font=header_font,
         )
         stats_title.grid(row=0, column=0, pady=(0, 6))
 
@@ -162,7 +157,7 @@ class SimulatorGUI:
         round_frame = ttk.Frame(self.stats_bin)
         round_frame.grid(row=2, column=0, pady=(8, 4))
         ttk.Label(round_frame, text="Round View").pack(side=tk.TOP)
-        self.data_round_combo = ttk.Combobox(
+        self.data_round_combo = ttk.Spinbox(
             round_frame,
             textvariable=self.data_round_filter,
             values=["all"],
@@ -175,12 +170,13 @@ class SimulatorGUI:
         seed_frame = ttk.Frame(self.stats_bin)
         seed_frame.grid(row=3, column=0, pady=(6, 6))
         ttk.Label(seed_frame, text="Seed").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(seed_frame, textvariable=self.seed_id, width=18).pack(side=tk.LEFT)
+        ttk.Entry(seed_frame, textvariable=self.seed_id, takefocus=0, width=10).pack(side=tk.LEFT)
         ttk.Button(
             seed_frame,
-            text="Choose Seed",
+            text="Select",
+            takefocus=0,
             command=self.open_seed_manager,
-            padding=(10, 4),
+            padding=(4, 4),
         ).pack(side=tk.LEFT, padx=(6, 0))
 
         action_frame = ttk.Frame(self.stats_bin)
@@ -241,17 +237,39 @@ class SimulatorGUI:
                     )
 
         sim_bins = [
-            ("Bankroll", lambda parent: ttk.Entry(parent, textvariable=self.bankroll, width=10)),
-            ("Bet", lambda parent: ttk.Entry(parent, textvariable=self.bet, width=6)),
+            ("Bankroll", lambda parent: tk.Spinbox(
+                parent, 
+                from_=100, to=1000000,
+                increment=100,
+                textvariable=self.bankroll, 
+                width=10)),
+            ("Bet", lambda parent: tk.Spinbox(
+                parent, 
+                from_=25, to=100000,
+                increment=25,
+                textvariable=self.bet, 
+                width=6)),
             (
                 "Rounds",
-                lambda parent: tk.Spinbox(parent, from_=1, to=1000, textvariable=self.rounds, width=3),
-            ),
+                lambda parent: tk.Spinbox(
+                    parent, 
+                    from_=1, to=1000, 
+                    textvariable=self.rounds, 
+                    width=3)),
             (
                 "Hands",
-                lambda parent: tk.Spinbox(parent, from_=1, to=100, textvariable=self.hands_per_round, width=3),
-            ),
-            ("Decks", lambda parent: tk.Spinbox(parent, from_=1, to=12, textvariable=self.decks, width=3)),
+                lambda parent: tk.Spinbox(
+                    parent, 
+                    from_=1, to=100, 
+                    textvariable=self.hands_per_round, 
+                    width=3)),
+                ("Decks", 
+                lambda parent: tk.Spinbox(
+                    parent, 
+                    from_=1, to=12, 
+                    textvariable=self.decks,
+                    takefocus=0,
+                    width=3)),
             (
                 "Penetration",
                 lambda parent: tk.Spinbox(
@@ -260,22 +278,28 @@ class SimulatorGUI:
                     to=0.95,
                     increment=0.01,
                     textvariable=self.penetration,
-                    width=4,
-                ),
-            ),
+                    width=4)),
         ]
 
         rules_bins = [
             (
                 "Payout",
                 lambda parent: ttk.Combobox(
-                    parent, textvariable=self.payout, values=["3 to 2", "6 to 5"], state="readonly", width=5
+                    parent, 
+                    textvariable=self.payout, 
+                    takefocus=0, 
+                    values=["3 to 2", "6 to 5"], 
+                    state="readonly", width=5
                 ),
             ),
             (
                 "Dealer 17 Logic",
                 lambda parent: ttk.Combobox(
-                    parent, textvariable=self.dealer, values=["Hit Soft 17s", "Stand Soft 17s"], state="readonly", width=10
+                    parent, 
+                    textvariable=self.dealer, 
+                    takefocus=0, 
+                    values=["Hit Soft 17s", "Stand Soft 17s"], 
+                    state="readonly", width=10
                 ),
             ),
             (
@@ -289,6 +313,7 @@ class SimulatorGUI:
                 lambda parent: ttk.Combobox(
                     parent,
                     textvariable=self.split_aces_logic,
+                    takefocus=0,
                     values=["Single", "Carnival"],
                     state="readonly",
                     width=6,
@@ -299,6 +324,7 @@ class SimulatorGUI:
                 lambda parent: ttk.Combobox(
                     parent,
                     textvariable=self.surrender,
+                    takefocus=0,
                     values=["None", "Early", "Late"],
                     state="readonly",
                     width=4,
@@ -312,6 +338,7 @@ class SimulatorGUI:
                 lambda parent: ttk.Combobox(
                     parent,
                     textvariable=self.strategy_file,
+                    takefocus=0,
                     values=[self.strategy_file.get()],
                     state="readonly",
                     width=max(18, len(self.strategy_file.get())),
@@ -393,22 +420,23 @@ class SimulatorGUI:
 
     def _build_data_table(self, parent: tk.Widget):
         style = ttk.Style(parent)
+        style_font = tkfont.Font(family="Verdana", size=12)
         style.configure(
             "Data.Treeview",
             rowheight=24,
             borderwidth=1,
-            relief="solid",
+            relief="groove",
             background="white",
             fieldbackground="white",
-            bordercolor="#c7c7c7",
+            bordercolor="#979393",
             lightcolor="#c7c7c7",
             darkcolor="#c7c7c7",
         )
         style.configure(
             "Data.Treeview.Heading",
-            font=(None, 9, "bold"),
+            font=style_font,
             borderwidth=1,
-            relief="solid",
+            relief="groove",
         )
         style.map(
             "Data.Treeview",
@@ -492,7 +520,11 @@ class SimulatorGUI:
         def toggle():
             variable.set(not variable.get())
 
-        button = ttk.Button(parent, textvariable=text_var, command=toggle, width=6)
+        button = ttk.Button(parent, 
+                            textvariable=text_var, 
+                            takefocus=0, 
+                            command=toggle, 
+                            width=3)
         return button
 
     def _build_statistics_panel(self, parent: tk.Widget):
@@ -502,20 +534,19 @@ class SimulatorGUI:
         stats = [
             ("Split Aces Logic", "split_aces_logic"),
             ("Double After Split", "double_after_split"),
-            ("Total # of Rounds", "total_rounds"),
-            ("Total # of Hands Played", "total_hands"),
-            ("Total # of Shoes Played", "total_shoes"),
-            ("Total # of Cards Dealt", "total_cards"),
-            ("Total # of Hands Won", "total_wins"),
-            ("Total # of Hands Lost", "total_losses"),
-            ("Total # of Double Downs", "total_doubles"),
-            ("Total # of Splits (all cards)", "total_splits"),
-            ("Total # of Split Aces", "total_split_aces"),
-            ("Total # of Surrenders", "total_surrenders"),
-            ("Average # Hands Played", "avg_hands"),
-            ("Average P/L ($)", "avg_pl"),
-            ("Average Open Bankroll", "avg_open_bankroll"),
-            ("Average Close Bankroll", "avg_close_bankroll"),
+            ("# of Rounds", "total_rounds"),
+            ("# of Hands Played", "total_hands"),
+            ("# of Cards Dealt", "total_cards"),
+            ("# of Hands Won", "total_wins"),
+            ("# of Hands Lost", "total_losses"),
+            ("# of Double Downs", "total_doubles"),
+            ("# of Splits (All Cards)", "total_splits"),
+            ("# of Splits (Aces)", "total_split_aces"),
+            ("# of Surrenders", "total_surrenders"),
+            ("Avg. # Hands Played", "avg_hands"),
+            ("Avg. P/L ($)", "avg_pl"),
+            ("Avg. Open Bankroll", "avg_open_bankroll"),
+            ("Avg. Close Bankroll", "avg_close_bankroll"),
         ]
         self.stat_vars: dict[str, tk.StringVar] = {}
         for row_index, (label, key) in enumerate(stats):
@@ -538,14 +569,13 @@ class SimulatorGUI:
                     split_logic_label = "Carnival" if split_logic.lower() == "carnival" else "Simple"
                     var.set(split_logic_label)
                 elif key == "double_after_split":
-                    var.set("Y" if self.das.get() else "N")
+                    var.set("Yes" if self.das.get() else "No")
                 else:
                     var.set("0")
             return
 
         total_rounds = int(df["round_number"].nunique())
         total_hands = int(len(df))
-        total_shoes = total_rounds
         cards_by_round = df.groupby("round_number")["cards_dealt"].max()
         total_cards = int(cards_by_round.sum()) if not cards_by_round.empty else 0
         bankroll_change = df["close_bankroll"] - df["open_bankroll"]
@@ -582,10 +612,9 @@ class SimulatorGUI:
         split_logic = self.split_aces_logic.get()
         split_logic_label = "Carnival" if split_logic.lower() == "carnival" else "Simple"
         self.stat_vars["split_aces_logic"].set(split_logic_label)
-        self.stat_vars["double_after_split"].set("Y" if self.das.get() else "N")
+        self.stat_vars["double_after_split"].set("Yes" if self.das.get() else "No")
         self.stat_vars["total_rounds"].set(f"{total_rounds}")
         self.stat_vars["total_hands"].set(f"{total_hands}")
-        self.stat_vars["total_shoes"].set(f"{total_shoes}")
         self.stat_vars["total_cards"].set(f"{total_cards}")
         self.stat_vars["total_wins"].set(f"{total_wins}")
         self.stat_vars["total_losses"].set(f"{total_losses}")
@@ -781,9 +810,9 @@ class SimulatorGUI:
         df["pl"] = df["bankroll"] - starting_bankroll
 
         self.ax.clear()
-        self.ax.set_xlabel("Hand #")
-        self.ax.set_ylabel("P/L ($)")
-        self.ax.set_title("Total Profit/Loss", fontname="Verdana", fontsize=18, fontweight="bold")
+        self.ax.set_xlabel("Total # of Hands Played")
+        self.ax.set_ylabel("Total P/L ($)")
+        self.ax.set_title("Simulation Analysis", fontname="Verdana", fontsize=16, fontweight="bold")
         self.ax.axhline(0, color="gray", linewidth=0.5)
         self.ax.grid(True, axis="x", color="#a05f5f", alpha=0.25)
         self.ax.grid(True, axis="y", color="#5f748c", alpha=0.25)
