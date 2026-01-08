@@ -53,14 +53,12 @@ class ChartWindow:
             textvariable=self.round_var,
             values=self._round_values,
             width=8,
+            command=self.apply_round_filter,
         )
         self.round_combo.grid(row=0, column=1, padx=(0, 8))
         self.round_combo.bind("<Return>", lambda *_: self.apply_round_filter())
-        ttk.Button(control_inner, text="Apply", command=self.apply_round_filter).grid(
-            row=0, column=2, padx=(0, 6)
-        )
         ttk.Button(control_inner, text="Show All", command=self.show_all).grid(
-            row=0, column=3
+            row=0, column=2
         )
 
     def set_round_values(self, rounds: list[int]):

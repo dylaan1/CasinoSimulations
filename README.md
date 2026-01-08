@@ -1,73 +1,67 @@
-# Blackjack Simulator
+# CasinoSimulations™ Blackjack
 
-A modular blackjack simulation engine for exploring different strategies and casino rules.
+A desktop blackjack simulator that lets you configure casino rules, run Monte Carlo-style simulations, and visualize results. The app stores run data in SQLite and provides a Tkinter UI for exploring deals, bankroll changes, and saved seeds.
 
 ## Features
 
-- **Modular architecture**
-  - `cards` – card objects and a shoe that reshuffles on a configurable penetration.
-  - `hand` – hand totals, soft/hard transitions, and split tracking.
-  - `player` – bankroll bookkeeping and decision logic for hits, stands, doubles, splits, and surrender.
-  - `dealer` – dealer behavior with optional hit-soft-17.
-  - `strategy` – JSON-driven basic strategy matrix.
-  - `simulator` – orchestrates games, records bankroll and card distributions, and writes results to SQLite.
+- **Rule configuration**: adjust decks, penetration, payouts, soft-17 logic, double-after-split, split-aces logic, surrender rules, and base wager/bankroll.
+- **Strategy engine**: plug in JSON basic strategy tables (`hard`, `soft`, `pair`) to drive hit/stand/double/split/surrender decisions.
+- **Run analysis**: view per-deal results in the data table, including player hands (A–D for splits), dealer cards, running/true count, and bankroll changes.
+- **Statistics panel**: aggregate wins/losses/pushes, doubles, splits, surrenders, and average bankroll metrics.
+- **Bankroll chart**: plot profit/loss over hands played, filter by round, and hover for round summaries.
+- **Seed management**: save or discard runs, favorite seeds, reload saved data, and delete unneeded seeds from the Seed Manager.
+- **Test mode**: run simulations without writing to permanent tables for quick experimentation.
 
-- **Configurable rules via `SimulationSettings`**
-  - Number of decks and shoe penetration.
-  - Dealer hits or stands on soft 17.
-  - Double after split toggle.
-  - Resplitting aces limit.
-  - Early surrender.
-  - Blackjack payout ratio.
-  - Per-hand bet amount and initial bankroll.
+## Requirements
 
-- **Strategy plug-ins**: point to any JSON basic strategy file; each defines `hard`, `soft`, and `pair` tables mapping player totals and dealer up-cards to actions.
+- Python 3.11+
+- Dependencies (installed via `pip`):
+  - `pandas`
+  - `matplotlib`
+  - `tkinter` (bundled with most Python distributions)
 
-- **Data output**: bankroll history, final summaries, and card distributions stored in SQLite for downstream analysis. A built-in Matplotlib plot visualizes bankroll progression for each trial.
+## Download & Install
 
-- **Test mode**: run simulations without saving results to permanent tables to perform dry runs. Toggle via the GUI settings or the `--test-mode` CLI flag.
+```bash
+git clone <your-repo-url>
+cd CasinoSimulations
+pip install .
+```
 
-- **GUI**: a Tkinter interface lets you configure rules, run simulations, visualize bankroll progression for any trial via a "Plot Trial" selector, and optionally save or discard results stored in SQLite.
+Alternatively, for editable development installs:
 
-- **Quality checks**: unit tests cover soft-hand transitions, surrender payouts, split-ace restrictions, and bankroll updates after doubles/splits; GitHub Actions runs the test suite on each push or pull request.
+```bash
+pip install -e .
+```
 
-## Usage
+## Launch
 
 ```bash
 python -m blackjack
 ```
 
-After installing with `pip install .`, a `blackjack-sim` application launcher is
-registered. You can create a desktop shortcut to this script so that the GUI
-opens like any other native app.
+The `blackjack-sim` console entry point is also available after installation:
 
 ```bash
-pip install .
-blackjack-sim  # runs without a console window
-
+blackjack-sim
 ```
 
-For a dry run that leaves results only in the temporary tables, pass
-`--test-mode` to the CLI:
+### Test Mode
+
+Run without saving to the permanent SQLite tables:
 
 ```bash
 python -m blackjack --test-mode
 ```
 
+Or toggle **Test Mode** in the GUI settings. A red banner appears when test mode is active.
 
-In the GUI, open **Settings** and check **Test Mode**. A red banner at the top of the window indicates when test mode is active.
+## Data Storage
 
-
-### Visualization
-
-The GUI uses Matplotlib to render a local line graph of profit/loss over the number of hands played. Results can also be queried directly from the SQLite database for custom analysis.
-
-The simulator expects `BJ_basicStrategy.json` to contain three top-level objects: `hard`, `soft`, and `pair`. Each maps player totals (or pair ranks) and dealer up-cards to recommended actions (`hit`, `stand`, `double`, `split`, `surrender`).
+Simulation output is persisted to the configured SQLite database (`simulation.db` by default). Temporary tables are used for in-progress runs and are only saved when you click **Save**. The Seed Manager provides access to saved runs by seed ID.
 
 ## Testing
 
 ```bash
 pytest
 ```
-
-GitHub Actions automatically executes the same tests on every push and pull request.
