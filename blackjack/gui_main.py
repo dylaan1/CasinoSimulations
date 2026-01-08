@@ -155,22 +155,26 @@ class SimulatorGUI:
         self._build_statistics_panel(self.stats_frame)
 
         round_frame = ttk.Frame(self.stats_bin)
-        round_frame.grid(row=2, column=0, pady=(8, 4))
-        ttk.Label(round_frame, text="Round View").pack(side=tk.TOP)
+        filter_frame = ttk.Frame(self.stats_bin)
+        filter_frame.grid(row=2, column=0, pady=(8, 4))
+        round_frame = ttk.Frame(filter_frame)
+        round_frame.pack(side=tk.LEFT)
+        ttk.Label(round_frame, text="Round View").pack(side=tk.TOP, anchor="w")
         self.data_round_combo = ttk.Spinbox(
             round_frame,
             textvariable=self.data_round_filter,
             values=["all"],
-            width=8,
+            width=6,
         )
         self.data_round_combo.pack(side=tk.TOP, pady=(4, 0))
         self.data_round_combo.bind("<<ComboboxSelected>>", lambda *_: self.update_table())
         self.data_round_combo.bind("<Return>", lambda *_: self.update_table())
 
-        seed_frame = ttk.Frame(self.stats_bin)
-        seed_frame.grid(row=3, column=0, pady=(6, 6))
+        ttk.Frame(filter_frame, width=16).pack(side=tk.LEFT)
+        seed_frame = ttk.Frame(filter_frame)
+        seed_frame.pack(side=tk.LEFT)
         ttk.Label(seed_frame, text="Seed").pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Entry(seed_frame, textvariable=self.seed_id, takefocus=0, width=10).pack(side=tk.LEFT)
+        ttk.Entry(seed_frame, textvariable=self.seed_id, takefocus=0, width=9).pack(side=tk.LEFT)
         ttk.Button(
             seed_frame,
             text="Select",
@@ -188,16 +192,10 @@ class SimulatorGUI:
             state=tk.DISABLED,
         )
         self.view_chart_btn.pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(
+        ttk.Button(
             action_frame,
             text="Exit",
             command=self.exit_prompt,
-            bg="red",
-            fg="black",
-            activebackground="red",
-            activeforeground="black",
-            padx=10,
-            pady=2,
         ).pack(side=tk.LEFT)
 
     def _build_settings_bar(self, parent: tk.Widget):
@@ -530,6 +528,8 @@ class SimulatorGUI:
     def _build_statistics_panel(self, parent: tk.Widget):
         parent.columnconfigure(0, weight=1)
         parent.columnconfigure(1, weight=1)
+        parent.columnconfigure(2, weight=1)
+        parent.columnconfigure(3, weight=1)
         label_font = tkfont.Font(family="Verdana", size=10)
         stats = [
             ("Split Aces Logic", "split_aces_logic"),
@@ -539,6 +539,7 @@ class SimulatorGUI:
             ("# of Cards Dealt", "total_cards"),
             ("# of Hands Won", "total_wins"),
             ("# of Hands Lost", "total_losses"),
+            ("# of Hands Pushed", "total_pushes"),
             ("# of Double Downs", "total_doubles"),
             ("# of Splits (All Cards)", "total_splits"),
             ("# of Splits (Aces)", "total_split_aces"),
@@ -549,14 +550,19 @@ class SimulatorGUI:
             ("Avg. Close Bankroll", "avg_close_bankroll"),
         ]
         self.stat_vars: dict[str, tk.StringVar] = {}
-        for row_index, (label, key) in enumerate(stats):
+        split_index = (len(stats) + 1) // 2
+        for stat_index, (label, key) in enumerate(stats):
+            column_group = 0 if stat_index < split_index else 1
+            row_index = stat_index if stat_index < split_index else stat_index - split_index
+            label_col = column_group * 2
+            value_col = label_col + 1
             ttk.Label(parent, text=f"{label}:", font=label_font).grid(
-                row=row_index, column=0, sticky="w", padx=(0, 6), pady=1
+                row=row_index, column=label_col, sticky="w", padx=(0, 6), pady=1
             )
             var = tk.StringVar(value="0")
             self.stat_vars[key] = var
             ttk.Label(parent, textvariable=var, font=label_font).grid(
-                row=row_index, column=1, sticky="w", pady=1
+                row=row_index, column=value_col, sticky="w", pady=1
             )
 
     def _update_statistics(self, df: pd.DataFrame):
@@ -570,25 +576,58 @@ class SimulatorGUI:
                     var.set(split_logic_label)
                 elif key == "double_after_split":
                     var.set("Yes" if self.das.get() else "No")
+                elif key in {"avg_pl", "avg_open_bankroll", "avg_close_bankroll"}:
+                    var.set("$0.00")
                 else:
                     var.set("0")
             return
 
         total_rounds = int(df["round_number"].nunique())
-        total_hands = int(len(df))
+        hand_columns = ["player_hand_a", "player_hand_b", "player_hand_c", "player_hand_d"]
+        total_hands = int(
+            df[hand_columns].apply(
+                lambda row: sum(bool(str(val).strip()) for val in row if pd.notna(val)),
+                axis=1,
+            ).sum()
+        )
         cards_by_round = df.groupby("round_number")["cards_dealt"].max()
         total_cards = int(cards_by_round.sum()) if not cards_by_round.empty else 0
-        bankroll_change = df["close_bankroll"] - df["open_bankroll"]
-        total_wins = int((bankroll_change > 0).sum())
-        total_losses = int((bankroll_change < 0).sum())
-        base_wager = float(df["wager"].min()) if not df["wager"].empty else 0.0
-        total_doubles = int((df["wager"] > base_wager + 1e-9).sum())
+        result_columns = ["result_a", "result_b", "result_c", "result_d"]
+        if all(col in df.columns for col in result_columns):
+            results = df[result_columns].fillna("").values.flatten().tolist()
+            if any(results):
+                total_wins = sum(1 for result in results if result == "Win")
+                total_losses = sum(1 for result in results if result == "Loss")
+                total_pushes = sum(1 for result in results if result == "Push")
+            else:
+                bankroll_change = df["close_bankroll"] - df["open_bankroll"]
+                total_wins = int((bankroll_change > 0).sum())
+                total_losses = int((bankroll_change < 0).sum())
+                total_pushes = int((bankroll_change == 0).sum())
+        else:
+            bankroll_change = df["close_bankroll"] - df["open_bankroll"]
+            total_wins = int((bankroll_change > 0).sum())
+            total_losses = int((bankroll_change < 0).sum())
+            total_pushes = int((bankroll_change == 0).sum())
+        total_doubles = int(
+            df[hand_columns]
+            .astype(str)
+            .apply(lambda row: row.str.contains(r"\(Double\)").sum(), axis=1)
+            .sum()
+        )
         split_columns = ["player_hand_b", "player_hand_c", "player_hand_d"]
         split_mask = df[split_columns].apply(
-            lambda row: any(str(val).strip() for val in row if pd.notna(val)),
+            lambda row: sum(bool(str(val).strip()) for val in row if pd.notna(val)) > 0,
             axis=1,
         )
-        total_splits = int(split_mask.sum())
+        total_splits = int(
+            df[split_columns]
+            .apply(
+                lambda row: sum(bool(str(val).strip()) for val in row if pd.notna(val)),
+                axis=1,
+            )
+            .sum()
+        )
         split_aces = 0
         if total_splits:
             split_entries = df.loc[split_mask, split_columns].values.flatten().tolist()
@@ -599,12 +638,13 @@ class SimulatorGUI:
                 if text.startswith("A"):
                     split_aces += 1
         total_surrenders = int(
-            df[["player_hand_a", "player_hand_b", "player_hand_c", "player_hand_d"]]
+            df[hand_columns]
             .astype(str)
             .apply(lambda row: row.str.contains("Surrender").any(), axis=1)
             .sum()
         )
         avg_hands = total_hands / total_rounds if total_rounds else 0
+        bankroll_change = df["close_bankroll"] - df["open_bankroll"]
         avg_pl = bankroll_change.mean() if total_hands else 0
         avg_open = df["open_bankroll"].mean() if total_hands else 0
         avg_close = df["close_bankroll"].mean() if total_hands else 0
@@ -618,14 +658,15 @@ class SimulatorGUI:
         self.stat_vars["total_cards"].set(f"{total_cards}")
         self.stat_vars["total_wins"].set(f"{total_wins}")
         self.stat_vars["total_losses"].set(f"{total_losses}")
+        self.stat_vars["total_pushes"].set(f"{total_pushes}")
         self.stat_vars["total_doubles"].set(f"{total_doubles}")
         self.stat_vars["total_splits"].set(f"{total_splits}")
         self.stat_vars["total_split_aces"].set(f"{split_aces}")
         self.stat_vars["total_surrenders"].set(f"{total_surrenders}")
         self.stat_vars["avg_hands"].set(f"{avg_hands:.2f}")
-        self.stat_vars["avg_pl"].set(f"{avg_pl:,.2f}")
-        self.stat_vars["avg_open_bankroll"].set(f"{avg_open:,.2f}")
-        self.stat_vars["avg_close_bankroll"].set(f"{avg_close:,.2f}")
+        self.stat_vars["avg_pl"].set(f"${avg_pl:,.2f}")
+        self.stat_vars["avg_open_bankroll"].set(f"${avg_open:,.2f}")
+        self.stat_vars["avg_close_bankroll"].set(f"${avg_close:,.2f}")
 
     def _build_switch(self, parent: tk.Widget, variable: tk.BooleanVar) -> tk.Widget:
         base_bg = "#fad7c1"
@@ -714,6 +755,9 @@ class SimulatorGUI:
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Button(btn_frame, text="Run Seed", command=self.run_seed).pack(side=tk.LEFT)
         ttk.Button(btn_frame, text="Toggle Favorite", command=self.toggle_seed_favorite).pack(
+            side=tk.LEFT, padx=(6, 0)
+        )
+        ttk.Button(btn_frame, text="Delete", command=self.delete_seed).pack(
             side=tk.LEFT, padx=(6, 0)
         )
         ttk.Button(btn_frame, text="Close", command=self.seed_win.destroy).pack(
@@ -1002,6 +1046,10 @@ class SimulatorGUI:
                     player_hand_b,
                     player_hand_c,
                     player_hand_d,
+                    result_a,
+                    result_b,
+                    result_c,
+                    result_d,
                     dealer_cards,
                     cards_dealt,
                     running_count,
@@ -1032,8 +1080,7 @@ class SimulatorGUI:
         df["true_count"] = df["true_count"].round(1)
         df.rename(
             columns={
-                "round_number": "Round #",
-                "hands": "Hand #",
+                "round_number": "Deal #",
                 "wager": "Wager",
                 "open_bankroll": "Open Bankroll",
                 "close_bankroll": "Close Bankroll",
@@ -1050,8 +1097,7 @@ class SimulatorGUI:
         )
         df["True Count"] = df["True Count"].map(lambda val: f"{val:.1f}")
         column_order = [
-            "Round #",
-            "Hand #",
+            "Deal #",
             "Wager",
             "Running Count",
             "True Count",
@@ -1131,6 +1177,31 @@ class SimulatorGUI:
         conn.close()
         self._refresh_seed_tree()
 
+    def delete_seed(self):
+        selection = self.seed_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Select a seed to delete.")
+            return
+        seed_id = self.seed_tree.item(selection[0], "values")[0]
+        if not messagebox.askyesno(
+            "Delete Seed",
+            f"Delete seed {seed_id}? This will remove all saved results for the seed.",
+        ):
+            return
+        db_path = self.database.get()
+        conn = sqlite3.connect(db_path)
+        self._ensure_seed_tables(conn)
+        cur = conn.cursor()
+        cur.execute("DELETE FROM saved_seeds WHERE seed_id = ?", (seed_id,))
+        cur.execute("DELETE FROM saved_seed_results WHERE seed_id = ?", (seed_id,))
+        cur.execute("DELETE FROM saved_seed_bankroll WHERE seed_id = ?", (seed_id,))
+        conn.commit()
+        conn.close()
+        if self.loaded_seed_id == seed_id:
+            self._clear_table()
+            self._clear_plot()
+        self._refresh_seed_tree()
+
     def run_seed(self):
         seed_id = self.seed_id.get().strip()
         if not seed_id:
@@ -1182,6 +1253,10 @@ class SimulatorGUI:
                 player_hand_b,
                 player_hand_c,
                 player_hand_d,
+                result_a,
+                result_b,
+                result_c,
+                result_d,
                 dealer_cards,
                 cards_dealt,
                 running_count,
@@ -1244,6 +1319,10 @@ class SimulatorGUI:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
+                result_a TEXT,
+                result_b TEXT,
+                result_c TEXT,
+                result_d TEXT,
                 dealer_cards TEXT,
                 cards_dealt INTEGER,
                 running_count INTEGER,
@@ -1261,6 +1340,11 @@ class SimulatorGUI:
             )
             """
         )
+        for column in ("result_a", "result_b", "result_c", "result_d"):
+            cur.execute("PRAGMA table_info(saved_seed_results)")
+            existing_columns = {row[1] for row in cur.fetchall()}
+            if column not in existing_columns:
+                cur.execute(f"ALTER TABLE saved_seed_results ADD COLUMN {column} TEXT")
         conn.commit()
 
     def save_results(self):

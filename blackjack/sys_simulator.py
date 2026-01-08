@@ -48,6 +48,10 @@ TABLE_COLUMNS = {
         "player_hand_b",
         "player_hand_c",
         "player_hand_d",
+        "result_a",
+        "result_b",
+        "result_c",
+        "result_d",
         "dealer_cards",
         "running_count",
         "true_count",
@@ -125,6 +129,10 @@ class Simulator:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
+                result_a TEXT,
+                result_b TEXT,
+                result_c TEXT,
+                result_d TEXT,
                 dealer_cards TEXT,
                 running_count INTEGER,
                 true_count REAL,
@@ -140,6 +148,10 @@ class Simulator:
             self._ensure_column(table, "player_hand_b", "TEXT")
             self._ensure_column(table, "player_hand_c", "TEXT")
             self._ensure_column(table, "player_hand_d", "TEXT")
+            self._ensure_column(table, "result_a", "TEXT")
+            self._ensure_column(table, "result_b", "TEXT")
+            self._ensure_column(table, "result_c", "TEXT")
+            self._ensure_column(table, "result_d", "TEXT")
             self._ensure_column(table, "running_count", "INTEGER")
             self._ensure_column(table, "true_count", "REAL")
             self._ensure_column(table, "cards_dealt", "INTEGER")
@@ -181,6 +193,10 @@ class Simulator:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
+                result_a TEXT,
+                result_b TEXT,
+                result_c TEXT,
+                result_d TEXT,
                 dealer_cards TEXT,
                 cards_dealt INTEGER,
                 running_count INTEGER,
@@ -199,6 +215,8 @@ class Simulator:
             """
         )
         self._ensure_column("saved_seeds", "favorite", "INTEGER")
+        for column in ("result_a", "result_b", "result_c", "result_d"):
+            self._ensure_column("saved_seed_results", column, "TEXT")
 
         self.conn.commit()
 
@@ -257,6 +275,10 @@ class Simulator:
                 player_hand_b TEXT,
                 player_hand_c TEXT,
                 player_hand_d TEXT,
+                result_a TEXT,
+                result_b TEXT,
+                result_c TEXT,
+                result_d TEXT,
                 dealer_cards TEXT,
                 running_count INTEGER,
                 true_count REAL,
@@ -312,6 +334,21 @@ class Simulator:
             return f"{cards} | {hand.best_value} (Bust)"
         return f"{cards} | {hand.best_value} (Stand)"
 
+    def _hand_result(self, hand: Hand, dealer_hand: Hand) -> str:
+        if hand.surrendered:
+            return "Loss"
+        if hand.is_bust:
+            return "Loss"
+        if dealer_hand.is_bust:
+            return "Win"
+        player_value = hand.best_value
+        dealer_value = dealer_hand.best_value
+        if player_value > dealer_value:
+            return "Win"
+        if player_value < dealer_value:
+            return "Loss"
+        return "Push"
+
     def run(self) -> None:
         allow_surrender = self.settings.surrender.lower() != "none"
         strat = BasicStrategy.from_json(
@@ -332,12 +369,15 @@ class Simulator:
             dealer = Dealer(hit_soft_17=self.settings.hit_soft_17)
             hands_played = 0
             hand_counter = 0
+            deal_counter = 0
             cur = self.conn.cursor()
             for _ in range(self.settings.hands_per_round):
                 if player_settings.bankroll < player_settings.bet_amount:
                     break
                 if shoe.penetration_reached:
                     shoe.shuffle()
+                deal_counter += 1
+                hand_open_bankroll = player_settings.bankroll
                 player_settings.bankroll -= player_settings.bet_amount
                 player_hand = Hand(bet=player_settings.bet_amount)
                 dealer_hand = Hand()
@@ -373,16 +413,19 @@ class Simulator:
                 running_count = shoe.running_count
                 true_count = round(shoe.true_count, 1)
                 cards_dealt = shoe.cards_dealt
+                player_entries = ["", "", "", ""]
+                result_entries = ["", "", "", ""]
+                total_wager = 0.0
                 for hand_index, hand in enumerate(player_hands):
                     hand_counter += 1
                     hands_played += 1
                     total_hands += 1
-                    player_entries = ["", "", "", ""]
                     slot = min(hand_index, len(player_entries) - 1)
                     player_entries[slot] = self._format_hand(
                         hand, self.settings.bet_amount
                     )
-                    hand_open_bankroll = player_settings.bankroll
+                    result_entries[slot] = self._hand_result(hand, dealer_hand)
+                    total_wager += hand.bet * (2 if hand.surrendered else 1)
                     change = self.resolve_hand(hand, dealer_hand, player_settings)
                     player_settings.bankroll += change
                     cur.execute(
@@ -392,62 +435,68 @@ class Simulator:
                         """,
                         (round_number, hand_counter, player_settings.bankroll),
                     )
-                    cur.execute(
-                        """
-                        INSERT INTO temp_results (
-                            sim,
-                            round_number,
-                            decks,
-                            penetration,
-                            payout,
-                            soft17,
-                            das,
-                            rsa,
-                            surrender,
-                            hands,
-                            wager,
-                            open_bankroll,
-                            close_bankroll,
-                            player_hand_a,
-                            player_hand_b,
-                            player_hand_c,
-                            player_hand_d,
-                            dealer_cards,
-                            running_count,
-                            true_count,
-                            cards_dealt
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                        """,
-                        (
-                            self.sim_number,
-                            round_number,
-                            self.settings.num_decks,
-                            self.settings.penetration,
-                            "3:2"
-                            if self.settings.blackjack_payout == 1.5
-                            else "6:5",
-                            "H17" if self.settings.hit_soft_17 else "S17",
-                            int(self.settings.double_after_split),
-                            1 if self.settings.split_aces_logic.lower() == "carnival" else 0,
-                            "E"
-                            if surrender_setting == "early"
-                            else "L"
-                            if surrender_setting == "late"
-                            else "N",
-                            hand_counter,
-                            hand.bet,
-                            hand_open_bankroll,
-                            player_settings.bankroll,
-                            player_entries[0],
-                            player_entries[1],
-                            player_entries[2],
-                            player_entries[3],
-                            dealer_text,
-                            running_count,
-                            true_count,
-                            cards_dealt,
-                        ),
-                    )
+                cur.execute(
+                    """
+                    INSERT INTO temp_results (
+                        sim,
+                        round_number,
+                        decks,
+                        penetration,
+                        payout,
+                        soft17,
+                        das,
+                        rsa,
+                        surrender,
+                        hands,
+                        wager,
+                        open_bankroll,
+                        close_bankroll,
+                        player_hand_a,
+                        player_hand_b,
+                        player_hand_c,
+                        player_hand_d,
+                        result_a,
+                        result_b,
+                        result_c,
+                        result_d,
+                        dealer_cards,
+                        running_count,
+                        true_count,
+                        cards_dealt
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        self.sim_number,
+                        round_number,
+                        self.settings.num_decks,
+                        self.settings.penetration,
+                        "3:2" if self.settings.blackjack_payout == 1.5 else "6:5",
+                        "H17" if self.settings.hit_soft_17 else "S17",
+                        int(self.settings.double_after_split),
+                        1 if self.settings.split_aces_logic.lower() == "carnival" else 0,
+                        "E"
+                        if surrender_setting == "early"
+                        else "L"
+                        if surrender_setting == "late"
+                        else "N",
+                        deal_counter,
+                        total_wager,
+                        hand_open_bankroll,
+                        player_settings.bankroll,
+                        player_entries[0],
+                        player_entries[1],
+                        player_entries[2],
+                        player_entries[3],
+                        result_entries[0],
+                        result_entries[1],
+                        result_entries[2],
+                        result_entries[3],
+                        dealer_text,
+                        running_count,
+                        true_count,
+                        cards_dealt,
+                    ),
+                )
             cur.execute(
                 "INSERT INTO temp_summary (round_number, hands_played, bankroll) VALUES (?,?,?)",
                 (round_number, hands_played, player_settings.bankroll),
@@ -574,6 +623,10 @@ class Simulator:
                 player_hand_b,
                 player_hand_c,
                 player_hand_d,
+                result_a,
+                result_b,
+                result_c,
+                result_d,
                 dealer_cards,
                 cards_dealt,
                 running_count,
@@ -590,6 +643,10 @@ class Simulator:
                 player_hand_b,
                 player_hand_c,
                 player_hand_d,
+                result_a,
+                result_b,
+                result_c,
+                result_d,
                 dealer_cards,
                 cards_dealt,
                 running_count,
