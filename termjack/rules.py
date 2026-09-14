@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field, asdict
+
+
+@dataclass
+class SideBetRules:
+    enabled: bool = False
+    max_bet: float = 100.0
+
+
+@dataclass
+class Rules:
+    num_decks: int = 6
+    penetration: float = 0.75  # fraction of shoe dealt before reshuffle
+    das: bool = True  # double after split allowed
+    rsa: bool = False  # resplit aces allowed
+    blackjack_payout: float = 1.5  # 1.5 = 3:2, 1.2 = 6:5
+    surrender: str = "late"  # "late" | "early" | "off"
+    hit_soft_17: bool = False  # False = dealer stands soft 17 (S17), True = hits (H17)
+    split_max_hands: int = 4  # max individual hands resulting from splits
+
+    default_bet: float = 10.0
+    num_hands: int = 1  # simultaneous hands to play, 1-3
+
+    power_poker: SideBetRules = field(default_factory=SideBetRules)
+    star21: SideBetRules = field(default_factory=SideBetRules)
+    dealer_buster: SideBetRules = field(default_factory=SideBetRules)
+
+    @property
+    def surrender_late(self) -> bool:
+        return self.surrender == "late"
+
+    @property
+    def surrender_early(self) -> bool:
+        return self.surrender == "early"
+
+    @property
+    def surrender_enabled(self) -> bool:
+        return self.surrender in ("late", "early")
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Rules":
+        data = dict(data)
+        pp = data.pop("power_poker", None) or {}
+        s21 = data.pop("star21", None) or {}
+        buster = data.pop("dealer_buster", None) or {}
+        rules = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        rules.power_poker = SideBetRules(**pp) if pp else SideBetRules()
+        rules.star21 = SideBetRules(**s21) if s21 else SideBetRules()
+        rules.dealer_buster = SideBetRules(**buster) if buster else SideBetRules()
+        return rules
+
+    def blackjack_payout_label(self) -> str:
+        return "3:2" if abs(self.blackjack_payout - 1.5) < 1e-9 else "6:5"
