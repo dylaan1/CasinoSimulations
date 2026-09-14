@@ -399,9 +399,11 @@ class Round:
         if hand.is_split or len(hand.cards) != 2:
             return False
         if self.dealer_up.rank in PEEK_RANKS:
-            # Early surrender (if enabled) already had its chance pre-peek;
-            # late surrender is offered here, now that there's no dealer blackjack.
-            return self.rules.surrender == "late"
+            # Early surrender only ever applies pre-peek, and only against an
+            # Ace (see Round.__init__) -- by the time we're here that chance
+            # has passed (or never existed, for a ten-value up card), so both
+            # "late" and "early" fall back to ordinary post-peek surrender.
+            return self.rules.surrender in ("late", "early")
         return True
 
     def _illegal_reason(self, action: str, spot: Spot, hand: Hand) -> str:
@@ -435,7 +437,7 @@ class Round:
                 return "Can't surrender a hand created by a split."
             if len(hand.cards) != 2:
                 return "Surrender is only available as your first decision."
-            if self.dealer_up.rank in PEEK_RANKS and self.rules.surrender != "late":
+            if self.dealer_up.rank in PEEK_RANKS and self.rules.surrender not in ("late", "early"):
                 return "Surrender isn't available here."
             return "Surrender isn't allowed on this hand."
 
