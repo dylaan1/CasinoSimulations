@@ -15,7 +15,7 @@ HELP_LINES = [
     "RULES",
     "  das on/off                    Double after split",
     "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands)",
-    "  32 bj  /  65 bj                Blackjack pays 3:2 or 6:5",
+    "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5",
     "  surr late/early/off            Surrender mode",
     "  h17  /  s17                    Dealer hits / stands on soft 17",
     "  decks N                        Number of decks (1-12)",
@@ -52,6 +52,7 @@ HELP_LINES = [
     "",
     "MISC",
     "  help | ?                       Show this screen",
+    "  gamerules                      Show the full table-rules screen",
     "  quit | exit                    Quit termjack",
 ]
 
@@ -117,12 +118,12 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
     if head == "rsa":
         return _rsa_command(rest, session)
 
-    if head in ("32", "65") and rest and rest[0] == "bj":
-        rules.blackjack_payout = 1.5 if head == "32" else 1.2
+    if head == "bj" and rest and rest[0] in ("32", "65"):
+        rules.blackjack_payout = 1.5 if rest[0] == "32" else 1.2
         return f"Blackjack pays {rules.blackjack_payout_label()}"
 
-    if head in ("32bj", "65bj"):
-        rules.blackjack_payout = 1.5 if head == "32bj" else 1.2
+    if head in ("bj32", "bj65"):
+        rules.blackjack_payout = 1.5 if head == "bj32" else 1.2
         return f"Blackjack pays {rules.blackjack_payout_label()}"
 
     if head == "surr":
