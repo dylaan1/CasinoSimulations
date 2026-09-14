@@ -40,6 +40,11 @@ HELP_LINES = [
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
     "  newsession                     Reset shoe + session stats (RETURN confirms)",
     "",
+    "BET SPREAD",
+    "  betspread                      Show your true-count bet spread table",
+    "  betspread update <tc> <hands> <wager>",
+    "                                 Set the hands/wager for a true count tier",
+    "",
     "WAGERS",
     "  Arrow keys move around the betting grid; type digits to set an",
     "  amount for the highlighted cell; RETURN confirms it (or deals,",
@@ -213,6 +218,9 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         session.pending_confirmation = "newsession"
         return "Press RETURN to reset the shoe AND session stats (any other key cancels)."
 
+    if head == "betspread":
+        return _betspread_command(rest, session)
+
     if head in ("help", "?"):
         return HELP_TEXT
 
@@ -273,3 +281,18 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
         f"{label}: {'ON' if target.enabled else 'OFF'} "
         f"(min ${target.min_bet:,.2f}, max ${target.max_bet:,.2f})"
     )
+
+
+def _betspread_command(rest: List[str], session: "GameSession") -> str:
+    usage = "Usage: betspread update <true_count> <hands> <wager>"
+    if not rest or rest[0] != "update":
+        raise CommandError(usage)
+    tc = _parse_float(_require(rest, 1, usage), "true_count")
+    hands = _parse_int(_require(rest, 2, usage), "hands")
+    if not (1 <= hands <= 3):
+        raise CommandError("hands must be 1, 2, or 3")
+    wager = _parse_float(_require(rest, 3, usage), "wager")
+    if wager <= 0:
+        raise CommandError("wager must be positive")
+    session.bet_spread.upsert(tc, hands, wager)
+    return f"Bet spread: TC {tc:+.1f} -> {hands} hand(s) @ ${wager:,.2f}/hand"

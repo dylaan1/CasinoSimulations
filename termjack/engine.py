@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from .betspread import BetSpreadTable
 from .cards import Card, Shoe
 from .dealer import play_dealer_hand
 from .hand import Hand
@@ -98,10 +99,12 @@ class GameSession:
         stats: Stats,
         wagers: Optional[List[float]] = None,
         side_bet_wagers: Optional[List[Dict[str, float]]] = None,
+        bet_spread: Optional[BetSpreadTable] = None,
     ):
         self.rules = rules
         self.bankroll = bankroll
         self.stats = stats
+        self.bet_spread = bet_spread if bet_spread is not None else BetSpreadTable()
         self.shoe = Shoe(rules.num_decks, rules.penetration)
         self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
         self.side_bet_wagers: List[Dict[str, float]] = (
@@ -131,8 +134,12 @@ class GameSession:
     def ensure_shoe_ready(self) -> bool:
         """Cut a fresh shoe if penetration was reached (or too few cards remain).
 
-        Only ever called between rounds, never mid-round -- a shoe's
-        card order and running count must stay stable while a round is live.
+        Called right after a round settles (and once at session start) --
+        deliberately NOT at deal time. A round that crosses the cut card
+        still finishes with the shoe it started with; the player is meant to
+        see the resulting (possibly reset) true count on the betting screen
+        *before* sizing their next wager, not have it swapped out from under
+        an already-placed bet.
         """
         if self.shoe.penetration_reached or self.shoe.cards_remaining < 15:
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
@@ -191,7 +198,6 @@ class Round:
     def __init__(self, session: GameSession):
         self.session = session
         self.rules = session.rules
-        self.shoe_changed = session.ensure_shoe_ready()
 
         num_hands = self.rules.num_hands
 
@@ -283,9 +289,26 @@ class Round:
         """'even_money' or 'insurance', for the UI to pick prompt wording."""
         return "even_money" if spot.hands[0].is_blackjack else "insurance"
 
+    def side_bet_preview_label(self, spot: Spot, key: str) -> Optional[str]:
+        """Best-effort outcome label, usable as soon as the spot's first two
+        cards are dealt -- Power Poker and Star21 only key off those two
+        cards plus the dealer's up card, so (unlike Dealer Buster) their
+        outcome is knowable well before settlement."""
+        if key == "power_poker":
+            outcome = evaluate_power_poker(spot.side_bet_snapshot, self.dealer_up)
+        elif key == "star21":
+            outcome = evaluate_star21(spot.side_bet_snapshot, self.dealer_up)
+        else:
+            return None
+        return outcome[0] if outcome else None
+
     def _advance_early_surrender_cursor(self) -> None:
         while self._prelim_index < len(self.spots):
-            if self.spots[self._prelim_index].hands[0].surrendered:
+            hand = self.spots[self._prelim_index].hands[0]
+            # A player blackjack is never offered early surrender -- it's
+            # only ever eligible for even money, offered next in the
+            # INSURANCE phase.
+            if hand.surrendered or hand.is_blackjack:
                 self._prelim_index += 1
                 continue
             return
@@ -594,17 +617,22 @@ class Round:
         for spot in self.spots:
             player_cards = spot.side_bet_snapshot
             for key, (name, fn) in evaluators.items():
+                # Evaluated regardless of whether it was actually wagered --
+                # some outcomes (like the Star21 7-7-7 diamonds hit) are
+                # tracked in lifetime stats purely as an event, independent
+                # of the side bet's own win/loss bookkeeping below.
+                outcome = fn(player_cards, self.dealer_up)
+                label, multiplier = outcome if outcome else (None, 0.0)
+                if key == "star21" and label == "Suited 7-7-7 Diamonds":
+                    self.session.stats.record_blazing_seven()
+
                 wager = spot.side_bet_wagers.get(key, 0.0)
                 if wager <= 0:
                     continue
-                outcome = fn(player_cards, self.dealer_up)
-                label, multiplier = outcome if outcome else (None, 0.0)
                 win = wager * (1 + multiplier) if outcome else 0.0
                 if win:
                     self.session.adjust_bankroll(win)
                 self.session.stats.record_side_bet(wager, win)
-                if key == "star21" and label == "Suited 7-7-7 Diamonds" and win > 0:
-                    self.session.stats.record_blazing_seven()
                 results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
