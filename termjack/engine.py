@@ -18,6 +18,16 @@ OUTCOME_LABELS = {
     "surrender": "SURRENDER",
 }
 
+SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
+SIDE_BET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
+
+# American-style peek: the dealer checks their hole card for blackjack whenever
+# the up card is an Ace or any ten-value card. Insurance/even money are only
+# ever offered on an Ace up card -- a ten-value peek is silent (no side bet),
+# it just protects the player from playing (and doubling/splitting) into a
+# dealer blackjack that's already a done deal.
+PEEK_RANKS = {"A", "10", "J", "Q", "K"}
+
 
 class Phase(Enum):
     EARLY_SURRENDER = auto()
@@ -34,6 +44,20 @@ class InsufficientFundsError(Exception):
         self.available = available
 
 
+class NoWagerError(Exception):
+    def __init__(self, hand_index: int):
+        super().__init__(f"Set a wager for Hand {hand_index + 1} before dealing.")
+        self.hand_index = hand_index
+
+
+class BelowMinimumWagerError(Exception):
+    def __init__(self, hand_index: int, wager: float, table_min: float):
+        super().__init__(
+            f"Hand {hand_index + 1}'s wager (${wager:,.2f}) is below the table minimum (${table_min:,.2f})."
+        )
+        self.hand_index = hand_index
+
+
 @dataclass
 class Spot:
     """One of the 1-3 hands the player chose to play this round (pre-split)."""
@@ -41,10 +65,13 @@ class Spot:
     index: int
     hands: List[Hand] = field(default_factory=list)
     insurance_wager: float = 0.0
+    side_bet_wagers: Dict[str, float] = field(default_factory=dict)
+    side_bet_snapshot: List[Card] = field(default_factory=list)
 
 
 @dataclass
 class SideBetResult:
+    spot_index: int
     name: str
     wager: float
     label: Optional[str]
@@ -61,19 +88,26 @@ class HandResult:
 
 
 class GameSession:
-    """Long-lived state that persists across rounds: rules, bankroll, shoe, stats."""
+    """Long-lived state that persists across rounds: rules, bankroll, shoe, stats, wagers."""
 
-    def __init__(self, bankroll: float, rules: Rules, stats: Stats):
+    def __init__(
+        self,
+        bankroll: float,
+        rules: Rules,
+        stats: Stats,
+        wagers: Optional[List[float]] = None,
+        side_bet_wagers: Optional[List[Dict[str, float]]] = None,
+    ):
         self.rules = rules
         self.bankroll = bankroll
         self.stats = stats
-        self.stats.session_start_bankroll = bankroll
         self.shoe = Shoe(rules.num_decks, rules.penetration)
-        self.side_bet_wagers: Dict[str, float] = {
-            "power_poker": 0.0,
-            "star21": 0.0,
-            "dealer_buster": 0.0,
-        }
+        self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
+        self.side_bet_wagers: List[Dict[str, float]] = (
+            [dict(d) for d in side_bet_wagers]
+            if side_bet_wagers
+            else [{key: 0.0 for key in SIDE_BET_KEYS} for _ in range(3)]
+        )
         self._quit = False
 
     def adjust_bankroll(self, amount: float) -> None:
@@ -103,11 +137,40 @@ class GameSession:
             return True
         return False
 
+    def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
+        """Set the main wager for a hand slot. Returns an error string, or None on success.
+
+        0 is always allowed (it just means "no wager set yet" -- NoWagerError
+        catches that at deal time with its own message); any nonzero amount
+        must fall within [table_min, table_max].
+        """
+        if amount < 0:
+            return "Wager cannot be negative."
+        if amount > self.rules.table_max:
+            return f"Max Bet {self.rules.table_max:,.0f}"
+        if 0 < amount < self.rules.table_min:
+            return f"Min Bet {self.rules.table_min:,.0f}"
+        self.wagers[hand_index] = amount
+        return None
+
+    def try_set_side_bet_wager(self, hand_index: int, key: str, amount: float) -> Optional[str]:
+        rule = getattr(self.rules, key)
+        if not rule.enabled:
+            return f"{SIDE_BET_LABELS[key]} is not enabled."
+        if amount < 0:
+            return "Wager cannot be negative."
+        if amount > rule.max_bet:
+            return f"Max Bet {rule.max_bet:,.0f}"
+        if 0 < amount < rule.min_bet:
+            return f"Min Bet {rule.min_bet:,.0f}"
+        self.side_bet_wagers[hand_index][key] = amount
+        return None
+
 
 def try_start_round(session: GameSession) -> Tuple[Optional["Round"], Optional[str]]:
     try:
         return Round(session), None
-    except InsufficientFundsError as exc:
+    except (InsufficientFundsError, NoWagerError, BelowMinimumWagerError) as exc:
         return None, str(exc)
 
 
@@ -120,22 +183,44 @@ class Round:
         session.ensure_shoe_ready()
 
         num_hands = self.rules.num_hands
-        base_bet = self.rules.default_bet
 
-        self.side_bet_wagers: Dict[str, float] = {}
-        for key in ("power_poker", "star21", "dealer_buster"):
-            side_rule = getattr(self.rules, key)
-            amt = session.side_bet_wagers.get(key, 0.0) if side_rule.enabled else 0.0
-            self.side_bet_wagers[key] = min(amt, side_rule.max_bet) if amt > 0 else 0.0
+        per_hand_wager: List[float] = []
+        per_hand_sidebets: List[Dict[str, float]] = []
+        total_needed = 0.0
+        for i in range(num_hands):
+            wager = session.wagers[i]
+            if wager <= 0:
+                raise NoWagerError(i)
+            if wager < self.rules.table_min:
+                # Can happen if tablemin was raised after wagers were already
+                # (stickily) set from a previous round.
+                raise BelowMinimumWagerError(i, wager, self.rules.table_min)
+            per_hand_wager.append(wager)
+            total_needed += wager
 
-        total_needed = num_hands * base_bet + sum(self.side_bet_wagers.values())
+            sb: Dict[str, float] = {}
+            for key in SIDE_BET_KEYS:
+                side_rule = getattr(self.rules, key)
+                amt = session.side_bet_wagers[i].get(key, 0.0) if side_rule.enabled else 0.0
+                if amt > side_rule.max_bet:
+                    amt = side_rule.max_bet
+                if 0 < amt < side_rule.min_bet:
+                    # A stale wager now below a since-raised minimum is just
+                    # not placed, rather than blocking the whole round --
+                    # side bets are optional, the main wager is not.
+                    amt = 0.0
+                sb[key] = amt
+                total_needed += amt
+            per_hand_sidebets.append(sb)
+
         if not session.can_afford(total_needed):
             raise InsufficientFundsError(total_needed, session.bankroll)
         session.adjust_bankroll(-total_needed)
 
         self.dealer_hand = Hand()
         self.spots: List[Spot] = [
-            Spot(index=i, hands=[Hand(bet=base_bet)]) for i in range(num_hands)
+            Spot(index=i, hands=[Hand(bet=per_hand_wager[i])], side_bet_wagers=per_hand_sidebets[i])
+            for i in range(num_hands)
         ]
 
         # Standard deal order: each spot gets a card, then the dealer, twice.
@@ -144,9 +229,10 @@ class Round:
                 spot.hands[0].add_card(session.shoe.draw())
             self.dealer_hand.add_card(session.shoe.draw())
 
-        # Side bets key off the very first hand's original two cards --
-        # snapshot them now since that hand's cards may change if it's hit.
-        self._side_bet_snapshot: List[Card] = list(self.spots[0].hands[0].cards)
+        # Side bets key off each spot's original two cards -- snapshot them
+        # now since a hand's cards may change if it's hit.
+        for spot in self.spots:
+            spot.side_bet_snapshot = list(spot.hands[0].cards)
         self.dealer_up: Card = self.dealer_hand.cards[0]
 
         self.dealer_revealed = False
@@ -160,19 +246,21 @@ class Round:
         self._prelim_index = 0
         self._dealer_draw_iter: Optional[Iterator[Hand]] = None
 
-        if self.dealer_up.rank == "A":
+        if self.dealer_up.rank in PEEK_RANKS:
             if self.rules.surrender_early:
                 self.phase = Phase.EARLY_SURRENDER
                 self._advance_early_surrender_cursor()
-            else:
+            elif self.dealer_up.rank == "A":
                 self.phase = Phase.INSURANCE
                 self._advance_insurance_cursor()
+            else:
+                self._resolve_peek()
         else:
             self.phase = Phase.PLAYER_TURN
             self._advance_player_cursor()
 
     # ------------------------------------------------------------------
-    # Early surrender / insurance / even money (dealer Ace up only)
+    # Early surrender / insurance / even money / dealer peek
     # ------------------------------------------------------------------
 
     def current_prelim_spot(self) -> Optional[Spot]:
@@ -191,8 +279,11 @@ class Round:
                 continue
             return
         self._prelim_index = 0
-        self.phase = Phase.INSURANCE
-        self._advance_insurance_cursor()
+        if self.dealer_up.rank == "A":
+            self.phase = Phase.INSURANCE
+            self._advance_insurance_cursor()
+        else:
+            self._resolve_peek()
 
     def _advance_insurance_cursor(self) -> None:
         while self._prelim_index < len(self.spots):
@@ -259,7 +350,7 @@ class Round:
             return (
                 self.rules.rsa
                 and hand.cards[-1].rank == "A"
-                and len(spot.hands) < self.rules.split_max_hands
+                and len(spot.hands) < self.rules.rsa_max_hands
             )
         return True
 
@@ -296,20 +387,59 @@ class Round:
             return False
         if hand.is_split or len(hand.cards) != 2:
             return False
-        if self.dealer_up.rank == "A":
+        if self.dealer_up.rank in PEEK_RANKS:
             # Early surrender (if enabled) already had its chance pre-peek;
             # late surrender is offered here, now that there's no dealer blackjack.
             return self.rules.surrender == "late"
         return True
 
-    def perform_action(self, action: str) -> None:
+    def _illegal_reason(self, action: str, spot: Spot, hand: Hand) -> str:
+        if not self._hand_needs_play(spot, hand):
+            return "This hand is already finished."
+        if hand.is_split_aces and len(hand.cards) >= 2:
+            return "Split aces get one card each -- resplit only if RSA allows it and another Ace is drawn."
+
+        if action == "double":
+            if not hand.can_double:
+                return "Can't double now (already acted, or more than 2 cards)."
+            if hand.is_split and not self.rules.das:
+                return "Double after split is off (das off)."
+            if not self.session.can_afford(hand.bet):
+                return "Not enough bankroll to double."
+            return "Doubling isn't allowed on this hand."
+
+        if action == "split":
+            if not hand.can_split:
+                return "Those two cards can't be split."
+            if len(spot.hands) >= self.rules.split_max_hands:
+                return f"Max split hands reached (splitmax {self.rules.split_max_hands})."
+            if not self.session.can_afford(hand.bet):
+                return "Not enough bankroll to split."
+            return "Splitting isn't allowed on this hand."
+
+        if action == "surrender":
+            if self.rules.surrender == "off":
+                return "Surrender is disabled."
+            if hand.is_split:
+                return "Can't surrender a hand created by a split."
+            if len(hand.cards) != 2:
+                return "Surrender is only available as your first decision."
+            if self.dealer_up.rank in PEEK_RANKS and self.rules.surrender != "late":
+                return "Surrender isn't available here."
+            return "Surrender isn't allowed on this hand."
+
+        return f"'{action}' isn't allowed right now."
+
+    def perform_action(self, action: str) -> Optional[str]:
+        """Apply a hit/stand/double/split/surrender action. Returns an error
+        string (and leaves state unchanged) if the action isn't legal."""
         current = self.current_player_hand()
         if current is None:
-            return
+            return "No hand is awaiting an action."
         spot, hand = current
         legal = self.legal_actions(spot, hand)
         if action not in legal:
-            return
+            return self._illegal_reason(action, spot, hand)
 
         if action == "hit":
             hand.add_card(self.session.shoe.draw())
@@ -329,6 +459,7 @@ class Round:
             hand.surrendered = True
 
         self._advance_player_cursor()
+        return None
 
     def _do_split(self, spot: Spot, hand: Hand) -> None:
         self.session.adjust_bankroll(-hand.bet)
@@ -370,8 +501,8 @@ class Round:
         )
         # Dealer Buster needs the dealer to play out their hand to resolve,
         # even if every player hand is already settled.
-        buster_wager = self.side_bet_wagers.get("dealer_buster", 0.0)
-        need_dealer_play = any_live or buster_wager > 0
+        buster_wagered = any(spot.side_bet_wagers.get("dealer_buster", 0.0) > 0 for spot in self.spots)
+        need_dealer_play = any_live or buster_wagered
 
         if not need_dealer_play:
             self.dealer_revealed = True
@@ -423,34 +554,34 @@ class Round:
         return hand.bet, "push"
 
     def _settle_side_bets(self) -> List[SideBetResult]:
-        results = []
-        player_cards = self._side_bet_snapshot
-        dealer_up = self.dealer_up
-
+        results: List[SideBetResult] = []
         evaluators = {
             "power_poker": ("Power Poker", evaluate_power_poker),
             "star21": ("Star 21", evaluate_star21),
         }
-        for key, (name, fn) in evaluators.items():
-            wager = self.side_bet_wagers.get(key, 0.0)
-            if wager <= 0:
-                continue
-            outcome = fn(player_cards, dealer_up)
-            label, multiplier = outcome if outcome else (None, 0.0)
-            win = wager * (1 + multiplier) if outcome else 0.0
-            if win:
-                self.session.adjust_bankroll(win)
-            results.append(SideBetResult(name, wager, label, multiplier, win))
+        for spot in self.spots:
+            player_cards = spot.side_bet_snapshot
+            for key, (name, fn) in evaluators.items():
+                wager = spot.side_bet_wagers.get(key, 0.0)
+                if wager <= 0:
+                    continue
+                outcome = fn(player_cards, self.dealer_up)
+                label, multiplier = outcome if outcome else (None, 0.0)
+                win = wager * (1 + multiplier) if outcome else 0.0
+                if win:
+                    self.session.adjust_bankroll(win)
+                self.session.stats.record_side_bet(wager, win)
+                results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
-        buster_wager = self.side_bet_wagers.get("dealer_buster", 0.0)
-        if buster_wager > 0:
-            outcome = evaluate_dealer_buster(self.dealer_hand)
-            label, multiplier = outcome if outcome else (None, 0.0)
-            win = buster_wager * (1 + multiplier) if outcome else 0.0
-            if win:
-                self.session.adjust_bankroll(win)
-            results.append(SideBetResult("Dealer Buster", buster_wager, label, multiplier, win))
-
+            buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
+            if buster_wager > 0:
+                outcome = evaluate_dealer_buster(self.dealer_hand)
+                label, multiplier = outcome if outcome else (None, 0.0)
+                win = buster_wager * (1 + multiplier) if outcome else 0.0
+                if win:
+                    self.session.adjust_bankroll(win)
+                self.session.stats.record_side_bet(buster_wager, win)
+                results.append(SideBetResult(spot.index, "Dealer Buster", buster_wager, label, multiplier, win))
         return results
 
     def _settle_round(self) -> None:
@@ -466,13 +597,16 @@ class Round:
             for hand in spot.hands:
                 payout, outcome = self._settle_hand(hand, dealer_bust, dealer_value, dealer_bj)
                 self.session.adjust_bankroll(payout)
-                self.session.stats.record_hand_outcome(outcome)
+                self.session.stats.record_hand_outcome(outcome, hand.bet, payout)
                 if hand.is_blackjack:
                     self.session.stats.record_player_blackjack()
                 results.append(HandResult(spot.index, hand, outcome, payout))
 
-            if spot.insurance_wager > 0 and dealer_bj:
-                self.session.adjust_bankroll(spot.insurance_wager * 3)
+            if spot.insurance_wager > 0:
+                insurance_win = spot.insurance_wager * 3 if dealer_bj else 0.0
+                if insurance_win:
+                    self.session.adjust_bankroll(insurance_win)
+                self.session.stats.record_side_bet(spot.insurance_wager, insurance_win)
 
         self.results = results
         self.side_bet_results = self._settle_side_bets()
@@ -484,7 +618,7 @@ class Round:
             lines.append(f"Hand {r.spot_index + 1}: {label}  (${r.payout:,.2f} returned)")
         for sb in self.side_bet_results:
             if sb.win_amount > 0:
-                lines.append(f"{sb.name}: {sb.label}!  +${sb.win_amount:,.2f}")
+                lines.append(f"Hand {sb.spot_index + 1} {sb.name}: {sb.label}!  +${sb.win_amount:,.2f}")
             else:
-                lines.append(f"{sb.name}: no win  (-${sb.wager:,.2f})")
+                lines.append(f"Hand {sb.spot_index + 1} {sb.name}: no win  (-${sb.wager:,.2f})")
         return lines
