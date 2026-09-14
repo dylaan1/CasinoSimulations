@@ -11,18 +11,51 @@ class CommandError(Exception):
     pass
 
 
-HELP_TEXT = (
-    "Rules: das on/off | rsa on/off [maxsplit N] | 32 bj / 65 bj | "
-    "surr late/early/off | h17 | s17 | decks N | deckpen 0.NN | splitmax N | "
-    "tablemin N | tablemax N  |  "
-    "Bank: bank N | bank add N  |  "
-    "Setup: hands 1-3  |  "
-    "Side bets: powerpoker on/off [minbet N] [maxbet N] | "
-    "star21 on/off [minbet N] [maxbet N] | buster on/off [minbet N] [maxbet N]  |  "
-    "Wagers: use the arrow keys to move around the betting grid, type digits "
-    "to set an amount, RETURN to confirm or deal  |  "
-    "help | quit"
-)
+HELP_LINES = [
+    "RULES",
+    "  das on/off                    Double after split",
+    "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands)",
+    "  32 bj  /  65 bj                Blackjack pays 3:2 or 6:5",
+    "  surr late/early/off            Surrender mode",
+    "  h17  /  s17                    Dealer hits / stands on soft 17",
+    "  decks N                        Number of decks (1-12)",
+    "  deckpen 0.NN                   Deck penetration before reshuffle",
+    "  splitmax N                     Max hands from splitting non-ace pairs",
+    "  tablemin N  /  tablemax N      Table wager limits",
+    "  double facedown on/off         Deal the double-down card face down",
+    "",
+    "BANKROLL",
+    "  bank N                         Set bankroll to N",
+    "  bank add N                     Add N to bankroll",
+    "",
+    "TABLE SETUP",
+    "  hands 1-3                      Simultaneous hands to play",
+    "",
+    "SIDE BETS",
+    "  powerpoker on/off [minbet N] [maxbet N]",
+    "  star21 on/off [minbet N] [maxbet N]",
+    "  buster on/off [minbet N] [maxbet N]",
+    "",
+    "SHOE / SESSION",
+    "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
+    "  newsession                     Reset shoe + session stats (RETURN confirms)",
+    "",
+    "WAGERS",
+    "  Arrow keys move around the betting grid; type digits to set an",
+    "  amount for the highlighted cell; RETURN confirms it (or deals,",
+    "  if nothing is pending).",
+    "",
+    "IN-ROUND KEYS",
+    "  SPACE Hit   RETURN Stand   D Double   P Split   S Surrender",
+    "  Insurance / Even Money:  SPACE Yes   RETURN No",
+    "  Early Surrender:  S Surrender   RETURN Continue",
+    "",
+    "MISC",
+    "  help | ?                       Show this screen",
+    "  quit | exit                    Quit termjack",
+]
+
+HELP_TEXT = "  |  ".join(line.strip() for line in HELP_LINES if line.strip())
 
 _SIDEBET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
 
@@ -99,6 +132,10 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         rules.surrender = mode
         return f"Surrender: {mode.upper()}"
 
+    if head == "double" and rest and rest[0] == "facedown":
+        rules.double_facedown = _parse_bool_on_off(_require(rest, 1, "double facedown on/off"))
+        return f"Double-down card dealt face down: {'ON' if rules.double_facedown else 'OFF'}"
+
     if head == "h17":
         rules.hit_soft_17 = True
         return "Dealer hits soft 17 (H17)"
@@ -166,6 +203,14 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
 
     if head in ("powerpoker", "star21", "buster"):
         return _sidebet_toggle(head, rest, session)
+
+    if head == "newshoe":
+        session.pending_confirmation = "newshoe"
+        return "Press RETURN to shuffle in a brand-new shoe (any other key cancels)."
+
+    if head == "newsession":
+        session.pending_confirmation = "newsession"
+        return "Press RETURN to reset the shoe AND session stats (any other key cancels)."
 
     if head in ("help", "?"):
         return HELP_TEXT

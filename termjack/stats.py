@@ -24,6 +24,8 @@ class Stats:
     player_wins: int = 0
     dealer_wins: int = 0
     pushes: int = 0
+    dealer_busts_8plus: int = 0  # dealer busts on an 8th (or later) card
+    blazing_sevens: int = 0  # Star 21 hits on Suited 7-7-7 Diamonds
 
     lifetime_main_wagered: float = 0.0  # sum of main-hand bets settled, for EV%
     lifetime_main_pl: float = 0.0  # main-hand payouts minus bets, for EV%
@@ -36,22 +38,35 @@ class Stats:
     player_blackjacks: int = 0
     dealer_blackjacks: int = 0
 
+    session_wagered: float = 0.0  # every dollar risked this session (main + side + insurance)
+    session_pl: float = 0.0
+    session_player_wins: int = 0
+    session_dealer_wins: int = 0
+    session_pushes: int = 0
+
     def record_hand_outcome(self, outcome: str, bet: float, payout: float) -> None:
         self.hands_lifetime += 1
         self.hands_this_session += 1
         self.lifetime_main_wagered += bet
         self.lifetime_main_pl += payout - bet
+        self.session_wagered += bet
+        self.session_pl += payout - bet
         if outcome == "player_win":
             self.player_wins += 1
+            self.session_player_wins += 1
         elif outcome == "dealer_win":
             self.dealer_wins += 1
+            self.session_dealer_wins += 1
         elif outcome == "push":
             self.pushes += 1
+            self.session_pushes += 1
         elif outcome == "surrender":
             self.surrenders += 1
 
     def record_side_bet(self, wager: float, win_amount: float) -> None:
         self.lifetime_sidebet_pl += win_amount - wager
+        self.session_wagered += wager
+        self.session_pl += win_amount - wager
 
     def record_double(self) -> None:
         self.doubles += 1
@@ -64,6 +79,31 @@ class Stats:
 
     def record_dealer_blackjack(self) -> None:
         self.dealer_blackjacks += 1
+
+    def record_dealer_bust_8plus(self) -> None:
+        self.dealer_busts_8plus += 1
+
+    def record_blazing_seven(self) -> None:
+        self.blazing_sevens += 1
+
+    def reset_session(self) -> None:
+        """Zero every session-scoped counter; lifetime counters are untouched."""
+        self.hands_this_session = 0
+        self.surrenders = 0
+        self.doubles = 0
+        self.splits = 0
+        self.player_blackjacks = 0
+        self.dealer_blackjacks = 0
+        self.session_wagered = 0.0
+        self.session_pl = 0.0
+        self.session_player_wins = 0
+        self.session_dealer_wins = 0
+        self.session_pushes = 0
+
+    def session_pl_percent(self) -> float:
+        if self.session_wagered <= 0:
+            return 0.0
+        return self.session_pl / self.session_wagered * 100.0
 
     def lifetime_pl_dollars(self) -> float:
         return self.lifetime_main_pl + self.lifetime_sidebet_pl
@@ -85,6 +125,8 @@ class Stats:
             "player_wins": self.player_wins,
             "dealer_wins": self.dealer_wins,
             "pushes": self.pushes,
+            "dealer_busts_8plus": self.dealer_busts_8plus,
+            "blazing_sevens": self.blazing_sevens,
             "lifetime_main_wagered": self.lifetime_main_wagered,
             "lifetime_main_pl": self.lifetime_main_pl,
             "lifetime_sidebet_pl": self.lifetime_sidebet_pl,
@@ -98,6 +140,8 @@ class Stats:
         stats.player_wins = int(data.get("player_wins", 0))
         stats.dealer_wins = int(data.get("dealer_wins", 0))
         stats.pushes = int(data.get("pushes", 0))
+        stats.dealer_busts_8plus = int(data.get("dealer_busts_8plus", 0))
+        stats.blazing_sevens = int(data.get("blazing_sevens", 0))
         stats.lifetime_main_wagered = float(data.get("lifetime_main_wagered", 0.0))
         stats.lifetime_main_pl = float(data.get("lifetime_main_pl", 0.0))
         stats.lifetime_sidebet_pl = float(data.get("lifetime_sidebet_pl", 0.0))

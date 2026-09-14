@@ -12,10 +12,10 @@ from .sidebets import evaluate_dealer_buster, evaluate_power_poker, evaluate_sta
 from .stats import Stats
 
 OUTCOME_LABELS = {
-    "player_win": "WIN",
-    "dealer_win": "LOSE",
-    "push": "PUSH",
-    "surrender": "SURRENDER",
+    "player_win": "Win",
+    "dealer_win": "Lose",
+    "push": "Push",
+    "surrender": "Surrendered",
 }
 
 SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
@@ -34,6 +34,7 @@ class Phase(Enum):
     INSURANCE = auto()
     PLAYER_TURN = auto()
     DEALER_TURN = auto()
+    REVEAL = auto()  # flipping any face-down double-down cards, just before settlement
     SETTLED = auto()
 
 
@@ -109,6 +110,7 @@ class GameSession:
             else [{key: 0.0 for key in SIDE_BET_KEYS} for _ in range(3)]
         )
         self._quit = False
+        self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession", awaiting a RETURN to confirm
 
     def adjust_bankroll(self, amount: float) -> None:
         self.bankroll += amount
@@ -136,6 +138,15 @@ class GameSession:
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
             return True
         return False
+
+    def reset_shoe(self) -> None:
+        """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
+        self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
+
+    def reset_session(self) -> None:
+        """Forcibly cut a brand-new shoe and clear session-scoped stats."""
+        self.reset_shoe()
+        self.stats.reset_session()
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
         """Set the main wager for a hand slot. Returns an error string, or None on success.
@@ -180,7 +191,7 @@ class Round:
     def __init__(self, session: GameSession):
         self.session = session
         self.rules = session.rules
-        session.ensure_shoe_ready()
+        self.shoe_changed = session.ensure_shoe_ready()
 
         num_hands = self.rules.num_hands
 
@@ -247,7 +258,7 @@ class Round:
         self._dealer_draw_iter: Optional[Iterator[Hand]] = None
 
         if self.dealer_up.rank in PEEK_RANKS:
-            if self.rules.surrender_early:
+            if self.rules.surrender_early and self.dealer_up.rank == "A":
                 self.phase = Phase.EARLY_SURRENDER
                 self._advance_early_surrender_cursor()
             elif self.dealer_up.rank == "A":
@@ -388,9 +399,11 @@ class Round:
         if hand.is_split or len(hand.cards) != 2:
             return False
         if self.dealer_up.rank in PEEK_RANKS:
-            # Early surrender (if enabled) already had its chance pre-peek;
-            # late surrender is offered here, now that there's no dealer blackjack.
-            return self.rules.surrender == "late"
+            # Early surrender only ever applies pre-peek, and only against an
+            # Ace (see Round.__init__) -- by the time we're here that chance
+            # has passed (or never existed, for a ten-value up card), so both
+            # "late" and "early" fall back to ordinary post-peek surrender.
+            return self.rules.surrender in ("late", "early")
         return True
 
     def _illegal_reason(self, action: str, spot: Spot, hand: Hand) -> str:
@@ -424,7 +437,7 @@ class Round:
                 return "Can't surrender a hand created by a split."
             if len(hand.cards) != 2:
                 return "Surrender is only available as your first decision."
-            if self.dealer_up.rank in PEEK_RANKS and self.rules.surrender != "late":
+            if self.dealer_up.rank in PEEK_RANKS and self.rules.surrender not in ("late", "early"):
                 return "Surrender isn't available here."
             return "Surrender isn't allowed on this hand."
 
@@ -452,6 +465,8 @@ class Round:
             hand.bet *= 2
             hand.doubled = True
             hand.add_card(self.session.shoe.draw())
+            if self.rules.double_facedown:
+                hand.double_hidden = True
             self.session.stats.record_double()
         elif action == "split":
             self._do_split(spot, hand)
@@ -493,6 +508,25 @@ class Round:
     # Dealer turn
     # ------------------------------------------------------------------
 
+    def _has_hidden_doubles(self) -> bool:
+        return any(h.double_hidden for spot in self.spots for h in spot.hands)
+
+    def _finish_dealer_turn(self) -> None:
+        """Common tail once the dealer has no more cards to draw: reveal any
+        face-down double-down cards first (as its own visible step), then settle."""
+        if self._has_hidden_doubles():
+            self.phase = Phase.REVEAL
+        else:
+            self._settle_round()
+            self.phase = Phase.SETTLED
+
+    def reveal_doubles(self) -> None:
+        for spot in self.spots:
+            for hand in spot.hands:
+                hand.double_hidden = False
+        self._settle_round()
+        self.phase = Phase.SETTLED
+
     def _begin_dealer_turn_or_settle(self) -> None:
         any_live = any(
             not (h.is_bust or h.surrendered or h.even_money_taken or h.is_blackjack)
@@ -506,8 +540,7 @@ class Round:
 
         if not need_dealer_play:
             self.dealer_revealed = True
-            self._settle_round()
-            self.phase = Phase.SETTLED
+            self._finish_dealer_turn()
             return
 
         self.dealer_revealed = True
@@ -522,8 +555,7 @@ class Round:
             return False
         drawn = next(self._dealer_draw_iter, None)
         if drawn is None:
-            self._settle_round()
-            self.phase = Phase.SETTLED
+            self._finish_dealer_turn()
             return False
         return True
 
@@ -571,6 +603,8 @@ class Round:
                 if win:
                     self.session.adjust_bankroll(win)
                 self.session.stats.record_side_bet(wager, win)
+                if key == "star21" and label == "Suited 7-7-7 Diamonds" and win > 0:
+                    self.session.stats.record_blazing_seven()
                 results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
@@ -591,6 +625,8 @@ class Round:
 
         if dealer_bj:
             self.session.stats.record_dealer_blackjack()
+        if dealer_bust and len(self.dealer_hand.cards) >= 8:
+            self.session.stats.record_dealer_bust_8plus()
 
         results: List[HandResult] = []
         for spot in self.spots:
