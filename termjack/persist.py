@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+from .betspread import BetSpreadTable
 from .rules import Rules
 from .stats import Stats
 
@@ -20,8 +21,8 @@ def _default_side_bet_wagers() -> List[Dict[str, float]]:
     return [{key: 0.0 for key in SIDE_BET_KEYS} for _ in range(3)]
 
 
-def load_state() -> Tuple[float, Rules, Stats, List[float], List[Dict[str, float]]]:
-    """Return (bankroll, rules, stats, wagers, side_bet_wagers).
+def load_state() -> Tuple[float, Rules, Stats, List[float], List[Dict[str, float]], BetSpreadTable]:
+    """Return (bankroll, rules, stats, wagers, side_bet_wagers, bet_spread).
 
     Falls back to fresh defaults on any missing or corrupt state file
     rather than crashing the game.
@@ -47,13 +48,22 @@ def load_state() -> Tuple[float, Rules, Stats, List[float], List[Dict[str, float
             else:
                 side_bet_wagers = _default_side_bet_wagers()
 
-            return bankroll, rules, stats, wagers, side_bet_wagers
+            bet_spread = BetSpreadTable.from_dict(data.get("bet_spread") or {})
+
+            return bankroll, rules, stats, wagers, side_bet_wagers, bet_spread
         except (json.JSONDecodeError, ValueError, TypeError, KeyError):
             pass
 
     rules = Rules()
     stats = Stats(lifetime_starting_bankroll=DEFAULT_BANKROLL)
-    return DEFAULT_BANKROLL, rules, stats, _default_wagers(rules.default_bet), _default_side_bet_wagers()
+    return (
+        DEFAULT_BANKROLL,
+        rules,
+        stats,
+        _default_wagers(rules.default_bet),
+        _default_side_bet_wagers(),
+        BetSpreadTable(),
+    )
 
 
 def save_state(
@@ -62,6 +72,7 @@ def save_state(
     stats: Stats,
     wagers: List[float],
     side_bet_wagers: List[Dict[str, float]],
+    bet_spread: BetSpreadTable,
 ) -> None:
     data = {
         "bankroll": bankroll,
@@ -69,6 +80,7 @@ def save_state(
         "stats": stats.to_dict(),
         "wagers": list(wagers),
         "side_bet_wagers": [dict(d) for d in side_bet_wagers],
+        "bet_spread": bet_spread.to_dict(),
     }
     try:
         STATE_PATH.write_text(json.dumps(data, indent=2), encoding="utf8")
