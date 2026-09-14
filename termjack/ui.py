@@ -8,17 +8,17 @@ from .cards import Card
 from .engine import OUTCOME_LABELS, GameSession, Phase, Round, try_start_round
 from .hand import Hand
 
-CARD_H = 7
-CARD_W = 11
-FAN_OFFSET = 5
-GUTTER = 16
+CARD_H = 5
+CARD_W = 7
+FAN_OFFSET = 3
+GUTTER = 10
 SUB_HAND_SLOT = CARD_W + FAN_OFFSET  # min width for one split hand's card fan
 MAX_HANDS_PER_SPOT = 4  # reserve room for 3 splits (4 hands) per spot, 12 total
 SPOT_WIDTH = SUB_HAND_SLOT * MAX_HANDS_PER_SPOT
-PRIMARY_WIDTH = 32  # width the WAGER/BUSTER/STAR21/PP value is centered within
+PRIMARY_WIDTH = SPOT_WIDTH // 2  # width the WAGER/BUSTER/STAR21/PP value is centered within
 TABLE_WIDTH = GUTTER + 3 * SPOT_WIDTH
 MIN_COLS = TABLE_WIDTH + 8
-MIN_LINES = 58
+MIN_LINES = 54
 
 RETURN_KEYS = {10, 13, curses.KEY_ENTER}
 ACTION_HINTS = [
@@ -34,13 +34,11 @@ ROW_LABELS = ["WAGER:", "BUSTER:", "STAR 21:", "PP:"]
 ROW_KEYS = [None, "dealer_buster", "star21", "power_poker"]
 
 CARD_BACK = [
-    "┌─────────┐",
-    "│▒▒▒▒▒▒▒▒▒│",
-    "│▒▒▒▒▒▒▒▒▒│",
-    "│▒▒▒▒▒▒▒▒▒│",
-    "│▒▒▒▒▒▒▒▒▒│",
-    "│▒▒▒▒▒▒▒▒▒│",
-    "└─────────┘",
+    "┌─────┐",
+    "│▒▒▒▒▒│",
+    "│▒▒▒▒▒│",
+    "│▒▒▒▒▒│",
+    "└─────┘",
 ]
 
 
@@ -65,6 +63,13 @@ def _emph(text: str) -> str:
     return f"*** {text} ***"
 
 
+def _emph_compact(text: str) -> str:
+    """Tighter emphasis for split sub-hands, where slots are only
+    SUB_HAND_SLOT wide -- the full '*** N ***' treatment has zero gap left
+    over at that width and runs straight into the next hand's value."""
+    return f"*{text}*"
+
+
 def _card_color(card: Card) -> int:
     return curses.color_pair(1) if card.is_red else curses.color_pair(2)
 
@@ -81,13 +86,11 @@ def draw_card(win, y: int, x: int, card: Optional[Card], face_down: bool = False
     color = _card_color(card)
 
     lines = [
-        "┌─────────┐",
-        f"│{tag:<9}│",
-        "│         │",
-        f"│{glyph:^9}│",
-        "│         │",
-        f"│{tag:>9}│",
-        "└─────────┘",
+        "┌─────┐",
+        f"│{tag:<5}│",
+        f"│{glyph:^5}│",
+        f"│{tag:>5}│",
+        "└─────┘",
     ]
     for i, line in enumerate(lines):
         _safe_addstr(win, y + i, x, line, color)
@@ -233,7 +236,7 @@ def render(
         draw_hand(win, 7, dealer_x, dealer_hand, hide_hole=hide_hole)
 
     # ---- Insurance / even money / early surrender prompt ----
-    prompt_y = 14
+    prompt_y = 7 + CARD_H + 1
     if round_ and round_.phase == Phase.INSURANCE:
         spot = round_.current_prelim_spot()
         if spot is not None:
@@ -248,8 +251,8 @@ def render(
         _safe_addstr(win, prompt_y, _center_x(line, TABLE_WIDTH), line, curses.A_REVERSE)
 
     # ---- Per-hand WIN/LOSE/BUST status row ----
-    status_y = 16
-    cards_y = 18
+    status_y = prompt_y + 2
+    cards_y = status_y + 2
     value_y = cards_y + CARD_H + 1
     wager_y = value_y + 1
     buster_y = wager_y + 1
@@ -278,7 +281,8 @@ def render(
             status = hand_status_text(hand, round_) if round_ else ""
             _safe_addstr(win, status_y, sub_x, status, curses.A_BOLD)
             draw_hand(win, cards_y, sub_x, hand)
-            value_text = _emph(hand_value_label(hand))
+            emph = _emph if len(spot.hands) == 1 else _emph_compact
+            value_text = emph(hand_value_label(hand))
             _safe_addstr(win, value_y, sub_x, value_text, value_attr)
 
         # Betting grid rows (WAGER / BUSTER / STAR 21 / PP) -- one value per
