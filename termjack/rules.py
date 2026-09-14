@@ -21,6 +21,7 @@ class Rules:
     surrender: str = "late"  # "late" | "early" | "off"
     hit_soft_17: bool = False  # False = dealer stands soft 17 (S17), True = hits (H17)
     split_max_hands: int = 4  # max individual hands resulting from splitting non-ace pairs
+    double_facedown: bool = False  # if True, a double-down card is dealt face down until dealer/settlement reveal
 
     table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
     table_max: float = 5000.0  # max main wager on a single hand
