@@ -1,67 +1,25 @@
 # CasinoSimulations™ Blackjack
 
-A desktop blackjack simulator that lets you configure casino rules, run Monte Carlo-style simulations, and visualize results. The app stores run data in SQLite and provides a Tkinter UI for exploring deals, bankroll changes, and saved seeds.
+A macOS blackjack game and statistics engine run inside of your Mac Terminal. The player is presented with the option of playing up to three hands of blackjack at once, plus any of a number of side bets that payout according to a pre-determined set of rules. As you play, your lifetime statistics will be tracked so you can watch your bankroll grow over time and have an idea of how much you are earning per hour. The engine also tracks per-game statistics, available for our superstitious players who like to see the numbers when they believe their next big hand is about to come.
 
-## Features
+## CLI-based Settings
 
-- **Rule configuration**: adjust decks, penetration, payouts, soft-17 logic, double-after-split, split-aces logic, surrender rules, and base wager/bankroll.
-- **Strategy engine**: plug in JSON basic strategy tables (`hard`, `soft`, `pair`) to drive hit/stand/double/split/surrender decisions.
-- **Run analysis**: view per-deal results in the data table, including player hands (A–D for splits), dealer cards, running/true count, and bankroll changes.
-- **Statistics panel**: aggregate wins/losses/pushes, doubles, splits, surrenders, and average bankroll metrics.
-- **Bankroll chart**: plot profit/loss over hands played, filter by round, and hover for round summaries.
-- **Seed management**: save or discard runs, favorite seeds, reload saved data, and delete unneeded seeds from the Seed Manager.
-- **Test mode**: run simulations without writing to permanent tables for quick experimentation.
+Settings are modulated with the CLI through the use of different commands. These different commands allow the player to set the rules of their blackjack experience. These rules include:
+** Adjustable number of decks (max 16)
+** Modular deck penetration
+** Blackjack payouts of 3:2 and 6:5
+** Dealer S17 or H17 logic
+** Double After Split on/off
+** Re-Splitting Aces on/off
+** Surrender early, late, or not at all
+** Set or add to Player Bankroll
 
 ## Requirements
 
-- Python 3.11+
-- Dependencies (installed via `pip`):
-  - `pandas`
-  - `matplotlib`
-  - `tkinter` (bundled with most Python distributions)
 
 ## Download & Install
 
-```bash
-git clone <your-repo-url>
-cd CasinoSimulations
-pip install .
-```
-
-Alternatively, for editable development installs:
-
-```bash
-pip install -e .
-```
 
 ## Launch
 
-```bash
-python -m blackjack
-```
 
-The `blackjack-sim` console entry point is also available after installation:
-
-```bash
-blackjack-sim
-```
-
-### Test Mode
-
-Run without saving to the permanent SQLite tables:
-
-```bash
-python -m blackjack --test-mode
-```
-
-Or toggle **Test Mode** in the GUI settings. A red banner appears when test mode is active.
-
-## Data Storage
-
-Simulation output is persisted to the configured SQLite database (`simulation.db` by default). Temporary tables are used for in-progress runs and are only saved when you click **Save**. The Seed Manager provides access to saved runs by seed ID.
-
-## Testing
-
-```bash
-pytest
-```
