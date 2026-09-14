@@ -15,11 +15,13 @@ class Rules:
     penetration: float = 0.75  # fraction of shoe dealt before reshuffle
     das: bool = True  # double after split allowed
     rsa: bool = False  # resplit aces allowed
+    rsa_max_hands: int = 4  # max individual hands from resplitting aces (only matters if rsa is on)
     blackjack_payout: float = 1.5  # 1.5 = 3:2, 1.2 = 6:5
     surrender: str = "late"  # "late" | "early" | "off"
     hit_soft_17: bool = False  # False = dealer stands soft 17 (S17), True = hits (H17)
-    split_max_hands: int = 4  # max individual hands resulting from splits
+    split_max_hands: int = 4  # max individual hands resulting from splitting non-ace pairs
 
+    table_max: float = 5000.0  # max wager on a single hand (main bet or a side bet)
     default_bet: float = 10.0
     num_hands: int = 1  # simultaneous hands to play, 1-3
 
