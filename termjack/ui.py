@@ -12,10 +12,13 @@ CARD_H = 7
 CARD_W = 11
 FAN_OFFSET = 5
 GUTTER = 16
-SPOT_WIDTH = 32
+SUB_HAND_SLOT = CARD_W + FAN_OFFSET  # min width for one split hand's card fan
+MAX_HANDS_PER_SPOT = 4  # reserve room for 3 splits (4 hands) per spot, 12 total
+SPOT_WIDTH = SUB_HAND_SLOT * MAX_HANDS_PER_SPOT
+PRIMARY_WIDTH = 32  # width the WAGER/BUSTER/STAR21/PP value is centered within
 TABLE_WIDTH = GUTTER + 3 * SPOT_WIDTH
-MIN_COLS = 118
-MIN_LINES = 52
+MIN_COLS = TABLE_WIDTH + 8
+MIN_LINES = 58
 
 RETURN_KEYS = {10, 13, curses.KEY_ENTER}
 ACTION_HINTS = [
@@ -102,11 +105,6 @@ def draw_hand(win, y: int, x: int, hand: Hand, hide_hole: bool = False) -> None:
         draw_card(win, y, x + i * FAN_OFFSET, card, face_down=face_down)
 
 
-def draw_hand_centered(win, y: int, col_x: int, col_width: int, hand: Hand, hide_hole: bool = False) -> None:
-    x = col_x + max(0, (col_width - _hand_width(hand)) // 2)
-    draw_hand(win, y, x, hand, hide_hole=hide_hole)
-
-
 def hand_value_label(hand: Hand, hide_hole: bool = False) -> str:
     if hide_hole and len(hand.cards) >= 1:
         return str(hand.cards[0].value)
@@ -139,10 +137,11 @@ def rules_summary(session: GameSession) -> str:
     rsa = f"RSA:on(max{r.rsa_max_hands})" if r.rsa else "RSA:off"
     s17 = "H17" if r.hit_soft_17 else "S17"
     surr = f"Surr:{r.surrender}"
+    table_range = f"${r.table_min:,.0f}-${r.table_max:,.0f}" if r.table_min > 0 else f"${r.table_max:,.0f} max"
     return (
         f"termjack  |  {r.num_decks} deck(s) @ {r.penetration:.0%} pen  |  {s17}  |  "
         f"{das}  {rsa}  |  BJ {r.blackjack_payout_label()}  |  {surr}  |  "
-        f"splitmax {r.split_max_hands}  |  tablemax ${r.table_max:,.0f}"
+        f"splitmax {r.split_max_hands}  |  table {table_range}"
     )
 
 
@@ -151,7 +150,10 @@ def side_bet_summary(session: GameSession) -> str:
     parts = []
     for key, label in (("power_poker", "PowerPoker"), ("star21", "Star21"), ("dealer_buster", "Buster")):
         rule = getattr(r, key)
-        state = f"ON max${rule.max_bet:,.0f}" if rule.enabled else "off"
+        if rule.enabled:
+            state = f"ON ${rule.min_bet:,.0f}-${rule.max_bet:,.0f}" if rule.min_bet > 0 else f"ON max${rule.max_bet:,.0f}"
+        else:
+            state = "off"
         parts.append(f"{label}:{state}")
     return "  ".join(parts)
 
@@ -182,6 +184,7 @@ def stats_columns(session: GameSession) -> Tuple[List[Tuple[str, str]], List[Tup
         ("Splits", str(s.splits)),
         ("Player blackjacks", str(s.player_blackjacks)),
         ("Dealer blackjacks", str(s.dealer_blackjacks)),
+        ("Remaining cards", str(shoe.cards_remaining)),
         ("Running count", f"{shoe.running_count:+d}"),
         ("True count", f"{shoe.true_count:+.1f}"),
     ]
@@ -263,32 +266,30 @@ def render(
             continue
 
         spot = round_.spots[i]
-        is_split = len(spot.hands) > 1
+        # Each hand in the spot gets its own fixed-width slot, left-anchored
+        # left to right -- reserves room for the max (4 hands from 3 splits)
+        # without needing to reflow as splits happen, and without spreading
+        # the common 1-hand case out to fill the whole reserved width.
         for j, hand in enumerate(spot.hands):
+            sub_x = col_x + j * SUB_HAND_SLOT
             is_active = active is not None and active[1] is hand
             value_attr = curses.A_REVERSE if is_active else curses.A_BOLD
 
-            if is_split:
-                sub_x = col_x + j * 16
-                status = hand_status_text(hand, round_) if round_ else ""
-                _safe_addstr(win, status_y, sub_x, status, curses.A_BOLD)
-                draw_hand(win, cards_y, sub_x, hand)
-                value_text = _emph(hand_value_label(hand))
-                _safe_addstr(win, value_y, sub_x, value_text, value_attr)
-            else:
-                status = hand_status_text(hand, round_) if round_ else ""
-                _safe_addstr(win, status_y, _center_x(status, SPOT_WIDTH, col_x), status, curses.A_BOLD)
-                draw_hand_centered(win, cards_y, col_x, SPOT_WIDTH, hand)
-                value_text = _emph(hand_value_label(hand))
-                _safe_addstr(win, value_y, _center_x(value_text, SPOT_WIDTH, col_x), value_text, value_attr)
+            status = hand_status_text(hand, round_) if round_ else ""
+            _safe_addstr(win, status_y, sub_x, status, curses.A_BOLD)
+            draw_hand(win, cards_y, sub_x, hand)
+            value_text = _emph(hand_value_label(hand))
+            _safe_addstr(win, value_y, sub_x, value_text, value_attr)
 
-        # Betting grid rows (WAGER / BUSTER / STAR 21 / PP) -- one value per spot.
+        # Betting grid rows (WAGER / BUSTER / STAR 21 / PP) -- one value per
+        # spot, centered in a fixed zone regardless of how many hands it's
+        # split into.
         for row in range(4):
             y = [wager_y, buster_y, star21_y, pp_y][row]
             is_focused = betting and bet_row == row and bet_col == i
             text = _bet_cell_text(session, row, i, is_focused, bet_edit_buffer)
             attr = curses.A_REVERSE if is_focused else curses.A_NORMAL
-            _safe_addstr(win, y, _center_x(text, SPOT_WIDTH, col_x), text, attr)
+            _safe_addstr(win, y, _center_x(text, PRIMARY_WIDTH, col_x), text, attr)
 
     for row in range(4):
         y = [wager_y, buster_y, star21_y, pp_y][row]
@@ -333,7 +334,7 @@ def render(
     for i, (label, value) in enumerate(col_b):
         _safe_addstr(win, stats_y + 2 + i, 56, f"{label:<24}{value}")
 
-    footer_y = stats_y + 11
+    footer_y = stats_y + 12
     _safe_addstr(win, footer_y, 2, "Type 'help' for the full command list, or 'quit' to exit.", curses.A_DIM)
 
     win.refresh()

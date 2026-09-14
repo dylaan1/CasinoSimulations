@@ -14,11 +14,11 @@ class CommandError(Exception):
 HELP_TEXT = (
     "Rules: das on/off | rsa on/off [maxsplit N] | 32 bj / 65 bj | "
     "surr late/early/off | h17 | s17 | decks N | deckpen 0.NN | splitmax N | "
-    "tablemax N  |  "
+    "tablemin N | tablemax N  |  "
     "Bank: bank N | bank add N  |  "
     "Setup: hands 1-3  |  "
-    "Side bets: powerpoker on/off maxbet N | star21 on/off maxbet N | "
-    "buster on/off maxbet N  |  "
+    "Side bets: powerpoker on/off [minbet N] [maxbet N] | "
+    "star21 on/off [minbet N] [maxbet N] | buster on/off [minbet N] [maxbet N]  |  "
     "Wagers: use the arrow keys to move around the betting grid, type digits "
     "to set an amount, RETURN to confirm or deal  |  "
     "help | quit"
@@ -132,8 +132,19 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         amt = _parse_float(_require(rest, 0, "tablemax N"), "tablemax")
         if amt <= 0:
             raise CommandError("tablemax must be positive")
+        if amt < rules.table_min:
+            raise CommandError("tablemax cannot be below the current tablemin")
         rules.table_max = amt
         return f"Table max wager set to ${amt:,.2f}"
+
+    if head == "tablemin":
+        amt = _parse_float(_require(rest, 0, "tablemin N"), "tablemin")
+        if amt < 0:
+            raise CommandError("tablemin cannot be negative")
+        if amt > rules.table_max:
+            raise CommandError("tablemin cannot exceed the current tablemax")
+        rules.table_min = amt
+        return f"Table min wager set to ${amt:,.2f}"
 
     if head == "bank":
         if rest and rest[0] == "add":
@@ -187,17 +198,32 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
     key = {"powerpoker": "power_poker", "star21": "star21", "buster": "dealer_buster"}[head]
     target = getattr(session.rules, key)
     label = _SIDEBET_LABELS[key]
+    usage = f"Usage: {head} on/off [minbet N] [maxbet N]"
 
     i = 0
     if i < len(rest) and rest[i] in ("on", "off"):
         target.enabled = rest[i] == "on"
         i += 1
-    if i < len(rest) and rest[i] == "maxbet":
-        amt = _parse_float(_require(rest, i + 1, f"{head} on/off maxbet N"), "maxbet")
-        if amt <= 0:
-            raise CommandError("maxbet must be positive")
-        target.max_bet = amt
-        i += 2
+    while i < len(rest):
+        if rest[i] == "maxbet":
+            amt = _parse_float(_require(rest, i + 1, usage), "maxbet")
+            if amt <= 0:
+                raise CommandError("maxbet must be positive")
+            target.max_bet = amt
+            i += 2
+        elif rest[i] == "minbet":
+            amt = _parse_float(_require(rest, i + 1, usage), "minbet")
+            if amt < 0:
+                raise CommandError("minbet cannot be negative")
+            target.min_bet = amt
+            i += 2
+        else:
+            raise CommandError(usage)
     if i == 0:
-        raise CommandError(f"Usage: {head} on/off [maxbet N]")
-    return f"{label}: {'ON' if target.enabled else 'OFF'} (max bet ${target.max_bet:,.2f})"
+        raise CommandError(usage)
+    if target.min_bet > target.max_bet:
+        raise CommandError("minbet cannot exceed maxbet")
+    return (
+        f"{label}: {'ON' if target.enabled else 'OFF'} "
+        f"(min ${target.min_bet:,.2f}, max ${target.max_bet:,.2f})"
+    )

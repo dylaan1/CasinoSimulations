@@ -50,6 +50,14 @@ class NoWagerError(Exception):
         self.hand_index = hand_index
 
 
+class BelowMinimumWagerError(Exception):
+    def __init__(self, hand_index: int, wager: float, table_min: float):
+        super().__init__(
+            f"Hand {hand_index + 1}'s wager (${wager:,.2f}) is below the table minimum (${table_min:,.2f})."
+        )
+        self.hand_index = hand_index
+
+
 @dataclass
 class Spot:
     """One of the 1-3 hands the player chose to play this round (pre-split)."""
@@ -130,11 +138,18 @@ class GameSession:
         return False
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
-        """Set the main wager for a hand slot. Returns an error string, or None on success."""
+        """Set the main wager for a hand slot. Returns an error string, or None on success.
+
+        0 is always allowed (it just means "no wager set yet" -- NoWagerError
+        catches that at deal time with its own message); any nonzero amount
+        must fall within [table_min, table_max].
+        """
         if amount < 0:
             return "Wager cannot be negative."
         if amount > self.rules.table_max:
             return f"Max Bet {self.rules.table_max:,.0f}"
+        if 0 < amount < self.rules.table_min:
+            return f"Min Bet {self.rules.table_min:,.0f}"
         self.wagers[hand_index] = amount
         return None
 
@@ -146,6 +161,8 @@ class GameSession:
             return "Wager cannot be negative."
         if amount > rule.max_bet:
             return f"Max Bet {rule.max_bet:,.0f}"
+        if 0 < amount < rule.min_bet:
+            return f"Min Bet {rule.min_bet:,.0f}"
         self.side_bet_wagers[hand_index][key] = amount
         return None
 
@@ -153,7 +170,7 @@ class GameSession:
 def try_start_round(session: GameSession) -> Tuple[Optional["Round"], Optional[str]]:
     try:
         return Round(session), None
-    except (InsufficientFundsError, NoWagerError) as exc:
+    except (InsufficientFundsError, NoWagerError, BelowMinimumWagerError) as exc:
         return None, str(exc)
 
 
@@ -174,6 +191,10 @@ class Round:
             wager = session.wagers[i]
             if wager <= 0:
                 raise NoWagerError(i)
+            if wager < self.rules.table_min:
+                # Can happen if tablemin was raised after wagers were already
+                # (stickily) set from a previous round.
+                raise BelowMinimumWagerError(i, wager, self.rules.table_min)
             per_hand_wager.append(wager)
             total_needed += wager
 
@@ -181,7 +202,13 @@ class Round:
             for key in SIDE_BET_KEYS:
                 side_rule = getattr(self.rules, key)
                 amt = session.side_bet_wagers[i].get(key, 0.0) if side_rule.enabled else 0.0
-                amt = min(amt, side_rule.max_bet) if amt > 0 else 0.0
+                if amt > side_rule.max_bet:
+                    amt = side_rule.max_bet
+                if 0 < amt < side_rule.min_bet:
+                    # A stale wager now below a since-raised minimum is just
+                    # not placed, rather than blocking the whole round --
+                    # side bets are optional, the main wager is not.
+                    amt = 0.0
                 sb[key] = amt
                 total_needed += amt
             per_hand_sidebets.append(sb)

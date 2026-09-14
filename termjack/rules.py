@@ -6,6 +6,7 @@ from dataclasses import dataclass, field, asdict
 @dataclass
 class SideBetRules:
     enabled: bool = False
+    min_bet: float = 0.0
     max_bet: float = 100.0
 
 
@@ -21,7 +22,8 @@ class Rules:
     hit_soft_17: bool = False  # False = dealer stands soft 17 (S17), True = hits (H17)
     split_max_hands: int = 4  # max individual hands resulting from splitting non-ace pairs
 
-    table_max: float = 5000.0  # max wager on a single hand (main bet or a side bet)
+    table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
+    table_max: float = 5000.0  # max main wager on a single hand
     default_bet: float = 10.0
     num_hands: int = 1  # simultaneous hands to play, 1-3
 
