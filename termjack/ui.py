@@ -18,7 +18,7 @@ SPOT_WIDTH = SUB_HAND_SLOT * MAX_HANDS_PER_SPOT
 PRIMARY_WIDTH = SPOT_WIDTH // 2  # width the WAGER/BUSTER/STAR21/PP value is centered within
 TABLE_WIDTH = GUTTER + 3 * SPOT_WIDTH
 MIN_COLS = TABLE_WIDTH + 8
-MIN_LINES = 54
+MIN_LINES = 44
 
 RETURN_KEYS = {10, 13, curses.KEY_ENTER}
 ACTION_HINTS = [
@@ -29,8 +29,10 @@ ACTION_HINTS = [
     ("surrender", "S Surrender"),
 ]
 
-# Betting-grid rows: index 0 is the main wager, 1-3 are the side bets.
-ROW_LABELS = ["WAGER:", "BUSTER:", "STAR 21:", "PP:"]
+# Betting-grid rows: index 0 is the main wager, 1-3 are the side bets. Wager
+# and Buster share one screen row, Star21 and PP share another -- there's
+# ample horizontal room, and it's a cheap way to buy back vertical space.
+BET_LABELS = ["Wager", "Buster", "Star21", "PP"]
 ROW_KEYS = [None, "dealer_buster", "star21", "power_poker"]
 
 CARD_BACK = [
@@ -161,7 +163,9 @@ def side_bet_summary(session: GameSession) -> str:
     return "  ".join(parts)
 
 
-def stats_columns(session: GameSession) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+def stats_columns(session: GameSession) -> List[List[Tuple[str, str]]]:
+    """4 columns instead of 2 -- with the extra horizontal room this buys
+    back several rows of height versus stacking everything two-wide."""
     s = session.stats
     br = session.bankroll
     pl_d = s.lifetime_pl_dollars()
@@ -170,28 +174,32 @@ def stats_columns(session: GameSession) -> Tuple[List[Tuple[str, str]], List[Tup
     shoe = session.shoe
     sign = "+" if pl_d >= 0 else ""
 
-    col_a = [
+    col1 = [
         ("Bankroll", money(br)),
-        ("P/L $ (lifetime)", f"{sign}{money(pl_d)}"),
-        ("P/L % (lifetime)", f"{pl_p:+.1f}%"),
+        ("P/L $", f"{sign}{money(pl_d)}"),
+        ("P/L %", f"{pl_p:+.1f}%"),
         ("EV%", f"{ev:+.2f}%" if ev is not None else "N/A"),
-        ("Hands (lifetime)", str(s.hands_lifetime)),
+        ("Hands (life)", str(s.hands_lifetime)),
+    ]
+    col2 = [
         ("Player wins", str(s.player_wins)),
         ("Dealer wins", str(s.dealer_wins)),
         ("Pushes", str(s.pushes)),
+        ("Hands (sess)", str(s.hands_this_session)),
     ]
-    col_b = [
-        ("Hands (this session)", str(s.hands_this_session)),
+    col3 = [
         ("Surrenders", str(s.surrenders)),
         ("Doubles", str(s.doubles)),
         ("Splits", str(s.splits)),
-        ("Player blackjacks", str(s.player_blackjacks)),
-        ("Dealer blackjacks", str(s.dealer_blackjacks)),
+        ("Player BJ", str(s.player_blackjacks)),
+    ]
+    col4 = [
+        ("Dealer BJ", str(s.dealer_blackjacks)),
         ("Remaining cards", str(shoe.cards_remaining)),
         ("Running count", f"{shoe.running_count:+d}"),
         ("True count", f"{shoe.true_count:+.1f}"),
     ]
-    return col_a, col_b
+    return [col1, col2, col3, col4]
 
 
 def _bet_cell_text(session: GameSession, row: int, col: int, is_focused: bool, edit_buffer: str) -> str:
@@ -204,6 +212,26 @@ def _bet_cell_text(session: GameSession, row: int, col: int, is_focused: bool, e
         if not getattr(session.rules, ROW_KEYS[row]).enabled:
             return "off"
     return f"{amt:,.0f}"
+
+
+def _draw_bet_cell(
+    win,
+    y: int,
+    x: int,
+    width: int,
+    row: int,
+    col: int,
+    session: GameSession,
+    betting: bool,
+    bet_row: int,
+    bet_col: int,
+    bet_edit_buffer: str,
+) -> None:
+    is_focused = betting and bet_row == row and bet_col == col
+    text = _bet_cell_text(session, row, col, is_focused, bet_edit_buffer)
+    full = f"{BET_LABELS[row]}:{text}"
+    attr = curses.A_REVERSE if is_focused else curses.A_NORMAL
+    _safe_addstr(win, y, _center_x(full, width, x), full, attr)
 
 
 def render(
@@ -223,20 +251,24 @@ def render(
     _safe_addstr(win, 0, 2, rules_summary(session), curses.A_BOLD)
     _safe_addstr(win, 1, 2, side_bet_summary(session), curses.A_DIM)
 
-    # ---- DEALER ----
-    _safe_addstr(win, 3, _center_x("DEALER", TABLE_WIDTH), "DEALER", curses.A_BOLD)
-
+    # ---- DEALER (name and value share one line to save height) ----
     hide_hole = round_ is not None and not round_.dealer_revealed
     dealer_hand = round_.dealer_hand if round_ else Hand()
     if round_:
         value_text = _emph(hand_value_label(dealer_hand, hide_hole=hide_hole))
-        _safe_addstr(win, 5, _center_x(value_text, TABLE_WIDTH), value_text, curses.A_BOLD)
+        header = f"DEALER   {value_text}"
+    else:
+        header = "DEALER"
+    _safe_addstr(win, 3, _center_x(header, TABLE_WIDTH), header, curses.A_BOLD)
+
+    dealer_cards_y = 5
+    if round_:
         dw = _hand_width(dealer_hand)
         dealer_x = max(0, (TABLE_WIDTH - dw) // 2)
-        draw_hand(win, 7, dealer_x, dealer_hand, hide_hole=hide_hole)
+        draw_hand(win, dealer_cards_y, dealer_x, dealer_hand, hide_hole=hide_hole)
 
     # ---- Insurance / even money / early surrender prompt ----
-    prompt_y = 7 + CARD_H + 1
+    prompt_y = dealer_cards_y + CARD_H + 1
     if round_ and round_.phase == Phase.INSURANCE:
         spot = round_.current_prelim_spot()
         if spot is not None:
@@ -252,12 +284,10 @@ def render(
 
     # ---- Per-hand WIN/LOSE/BUST status row ----
     status_y = prompt_y + 2
-    cards_y = status_y + 2
-    value_y = cards_y + CARD_H + 1
-    wager_y = value_y + 1
-    buster_y = wager_y + 1
-    star21_y = buster_y + 1
-    pp_y = star21_y + 1
+    cards_y = status_y + 1
+    value_y = cards_y + CARD_H
+    bet_row_a_y = value_y + 1  # Wager + Buster, side by side
+    bet_row_b_y = bet_row_a_y + 1  # Star21 + PP, side by side
 
     num_hands = session.rules.num_hands
     active = round_.current_player_hand() if round_ else None
@@ -285,21 +315,15 @@ def render(
             value_text = emph(hand_value_label(hand))
             _safe_addstr(win, value_y, sub_x, value_text, value_attr)
 
-        # Betting grid rows (WAGER / BUSTER / STAR 21 / PP) -- one value per
-        # spot, centered in a fixed zone regardless of how many hands it's
-        # split into.
-        for row in range(4):
-            y = [wager_y, buster_y, star21_y, pp_y][row]
-            is_focused = betting and bet_row == row and bet_col == i
-            text = _bet_cell_text(session, row, i, is_focused, bet_edit_buffer)
-            attr = curses.A_REVERSE if is_focused else curses.A_NORMAL
-            _safe_addstr(win, y, _center_x(text, PRIMARY_WIDTH, col_x), text, attr)
+        # Betting grid: Wager/Buster on one row, Star21/PP on the next --
+        # one value per spot, centered in a fixed zone regardless of how
+        # many hands it's split into.
+        _draw_bet_cell(win, bet_row_a_y, col_x, PRIMARY_WIDTH, 0, i, session, betting, bet_row, bet_col, bet_edit_buffer)
+        _draw_bet_cell(win, bet_row_a_y, col_x + PRIMARY_WIDTH, PRIMARY_WIDTH, 1, i, session, betting, bet_row, bet_col, bet_edit_buffer)
+        _draw_bet_cell(win, bet_row_b_y, col_x, PRIMARY_WIDTH, 2, i, session, betting, bet_row, bet_col, bet_edit_buffer)
+        _draw_bet_cell(win, bet_row_b_y, col_x + PRIMARY_WIDTH, PRIMARY_WIDTH, 3, i, session, betting, bet_row, bet_col, bet_edit_buffer)
 
-    for row in range(4):
-        y = [wager_y, buster_y, star21_y, pp_y][row]
-        _safe_addstr(win, y, 0, ROW_LABELS[row], curses.A_DIM)
-
-    player_y = pp_y + 2
+    player_y = bet_row_b_y + 2
     _safe_addstr(win, player_y, _center_x("PLAYER", TABLE_WIDTH), "PLAYER", curses.A_BOLD)
 
     # ---- Action hint line ----
@@ -316,29 +340,31 @@ def render(
         hint = "[RETURN] Continue"
     _safe_addstr(win, hint_y, 2, hint, curses.A_DIM)
 
-    # ---- Message area (up to 3 lines) ----
+    # ---- Message area (up to 2 lines) ----
     msg_y = hint_y + 2
-    for i, line in enumerate(message.split("\n")[:3]):
+    for i, line in enumerate(message.split("\n")[:2]):
         _safe_addstr(win, msg_y + i, 2, line)
 
     # ---- Command input ----
-    input_y = msg_y + 4
+    input_y = msg_y + 3
     _safe_addstr(win, input_y, 2, f"> {buffer}")
 
     divider_y = input_y + 2
     _, max_x = win.getmaxyx()
     _safe_addstr(win, divider_y, 0, "-" * max(max_x - 1, 0))
 
-    # ---- Stats panel ----
+    # ---- Stats panel (4 columns) ----
     stats_y = divider_y + 1
     _safe_addstr(win, stats_y, 2, "STATS", curses.A_BOLD)
-    col_a, col_b = stats_columns(session)
-    for i, (label, value) in enumerate(col_a):
-        _safe_addstr(win, stats_y + 2 + i, 2, f"{label:<24}{value}")
-    for i, (label, value) in enumerate(col_b):
-        _safe_addstr(win, stats_y + 2 + i, 56, f"{label:<24}{value}")
+    columns = stats_columns(session)
+    col_x_positions = [2, 34, 66, 98]
+    max_rows = 0
+    for col_x, col in zip(col_x_positions, columns):
+        for i, (label, value) in enumerate(col):
+            _safe_addstr(win, stats_y + 2 + i, col_x, f"{label:<16}{value}")
+        max_rows = max(max_rows, len(col))
 
-    footer_y = stats_y + 12
+    footer_y = stats_y + 2 + max_rows + 1
     _safe_addstr(win, footer_y, 2, "Type 'help' for the full command list, or 'quit' to exit.", curses.A_DIM)
 
     win.refresh()
