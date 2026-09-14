@@ -15,11 +15,10 @@ GUTTER = 10
 SUB_HAND_SLOT = CARD_W + FAN_OFFSET  # min width for one split hand's card fan
 MAX_HANDS_PER_SPOT = 4  # reserve room for 3 splits (4 hands) per spot, 12 total
 SPOT_WIDTH = SUB_HAND_SLOT * MAX_HANDS_PER_SPOT
-PRIMARY_WIDTH = SPOT_WIDTH // 2  # width the WAGER/BUSTER/STAR21/PP value is centered within
 TABLE_WIDTH = GUTTER + 3 * SPOT_WIDTH
 NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, regardless of `hands`
-MIN_COLS = TABLE_WIDTH + 8
-MIN_LINES = 46
+MIN_COLS = max(TABLE_WIDTH + 8, 150)
+MIN_LINES = 40
 
 RETURN_KEYS = {10, 13, curses.KEY_ENTER}
 ACTION_HINTS = [
@@ -30,11 +29,12 @@ ACTION_HINTS = [
     ("surrender", "S Surrender"),
 ]
 
-# Betting-grid rows: index 0 is the main wager, 1-3 are the side bets. Wager
-# and Buster share one screen row, Star21 and PP share another -- there's
-# ample horizontal room, and it's a cheap way to buy back vertical space.
-BET_LABELS = ["Wager", "Buster", "Star21", "PP"]
-ROW_KEYS = [None, "dealer_buster", "star21", "power_poker"]
+# Betting-grid rows: index 0 is the main wager, 1-3 are the side bets, in the
+# same left-to-right order they're drawn on screen (PP, S21, BUST).
+ROW_KEYS = [None, "power_poker", "star21", "dealer_buster"]
+SIDEBET_LABELS = ["PP", "S21", "BUST"]
+WAGER_MAX_LEN = 8
+SIDEBET_MAX_LEN = 5
 
 CARD_BACK = [
     "┌─────┐",
@@ -170,29 +170,6 @@ def rules_summary(session: GameSession) -> str:
     )
 
 
-def rules_detail(session: GameSession) -> str:
-    r = session.rules
-    das = "DAS:on" if r.das else "DAS:off"
-    rsa = f"RSA:on(max{r.rsa_max_hands})" if r.rsa else "RSA:off"
-    surr = f"Surr:{r.surrender}"
-    table_range = f"${r.table_min:,.0f}-${r.table_max:,.0f}" if r.table_min > 0 else f"${r.table_max:,.0f} max"
-    facedown = "  DblFacedown:on" if r.double_facedown else ""
-    return f"{das}  {rsa}  {surr}  splitmax {r.split_max_hands}  table {table_range}{facedown}"
-
-
-def side_bet_summary(session: GameSession) -> str:
-    r = session.rules
-    parts = []
-    for key, label in (("power_poker", "PowerPoker"), ("star21", "Star21"), ("dealer_buster", "Buster")):
-        rule = getattr(r, key)
-        if rule.enabled:
-            state = f"ON ${rule.min_bet:,.0f}-${rule.max_bet:,.0f}" if rule.min_bet > 0 else f"ON max${rule.max_bet:,.0f}"
-        else:
-            state = "off"
-        parts.append(f"{label}:{state}")
-    return "  ".join(parts)
-
-
 def lifetime_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
     s = session.stats
     pl_d = s.lifetime_pl_dollars()
@@ -235,32 +212,11 @@ def session_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
     ]
 
 
-def _bet_cell_text(
-    session: GameSession, round_: Optional[Round], row: int, col: int, is_focused: bool, edit_buffer: str
-) -> str:
-    if is_focused and edit_buffer:
-        return edit_buffer
-    if row == 0:
-        if round_ is not None and col < len(round_.spots):
-            amt = sum(h.bet for h in round_.spots[col].hands)
-        else:
-            amt = session.wagers[col]
-    else:
-        if not getattr(session.rules, ROW_KEYS[row]).enabled:
-            return "off"
-        if round_ is not None and col < len(round_.spots):
-            amt = round_.spots[col].side_bet_wagers.get(ROW_KEYS[row], 0.0)
-        else:
-            amt = session.side_bet_wagers[col].get(ROW_KEYS[row], 0.0)
-    return f"{amt:,.0f}"
-
-
-def _draw_bet_cell(
+def _draw_wager_cell(
     win,
     y: int,
     x: int,
     width: int,
-    row: int,
     col: int,
     session: GameSession,
     round_: Optional[Round],
@@ -270,11 +226,56 @@ def _draw_bet_cell(
     bet_edit_buffer: str,
     extra_attr: int = 0,
 ) -> None:
-    is_focused = betting and bet_row == row and bet_col == col
-    text = _bet_cell_text(session, round_, row, col, is_focused, bet_edit_buffer)
-    full = f"{BET_LABELS[row]}:{text}"
-    attr = curses.A_REVERSE if is_focused else (curses.A_NORMAL | extra_attr)
-    _safe_addstr(win, y, _center_x(full, width, x), full, attr)
+    is_focused = betting and bet_row == 0 and bet_col == col
+    if is_focused and bet_edit_buffer:
+        text = bet_edit_buffer
+    elif round_ is not None and col < len(round_.spots):
+        text = f"{sum(h.bet for h in round_.spots[col].hands):,.0f}"
+    else:
+        text = f"{session.wagers[col]:,.0f}"
+    attr = curses.A_REVERSE if is_focused else extra_attr
+    _safe_addstr(win, y, _center_x(text, width, x), text, attr)
+
+
+def _draw_sidebet_headers(win, y: int, x: int, width: int) -> None:
+    sub_w = width // 3
+    for i, label in enumerate(SIDEBET_LABELS):
+        _safe_addstr(win, y, _center_x(label, sub_w, x + i * sub_w), label, curses.A_DIM | curses.A_UNDERLINE)
+
+
+def _draw_sidebet_amounts(
+    win,
+    y: int,
+    x: int,
+    width: int,
+    col: int,
+    session: GameSession,
+    round_: Optional[Round],
+    betting: bool,
+    bet_row: int,
+    bet_col: int,
+    bet_edit_buffer: str,
+    extra_attr: int = 0,
+) -> None:
+    sub_w = width // 3
+    for slot, row in enumerate((1, 2, 3)):
+        key = ROW_KEYS[row]
+        rule = getattr(session.rules, key)
+        sub_x = x + slot * sub_w
+        is_focused = betting and bet_row == row and bet_col == col
+        if not rule.enabled:
+            # Greyed out and, per enabled_rows() in _main, simply never
+            # reachable by the row scroller -- unselectable, not just styled.
+            _safe_addstr(win, y, _center_x("Off", sub_w, sub_x), "Off", curses.A_DIM)
+            continue
+        if is_focused and bet_edit_buffer:
+            text = bet_edit_buffer
+        elif round_ is not None and col < len(round_.spots):
+            text = f"{round_.spots[col].side_bet_wagers.get(key, 0.0):,.0f}"
+        else:
+            text = f"{session.side_bet_wagers[col].get(key, 0.0):,.0f}"
+        attr = curses.A_REVERSE if is_focused else extra_attr
+        _safe_addstr(win, y, _center_x(text, sub_w, sub_x), text, attr)
 
 
 def render(
@@ -290,19 +291,18 @@ def render(
     stdscr.erase()
     win = stdscr
     betting = round_ is None
+    _, max_x = win.getmaxyx()
 
-    # ---- Header: short rules summary (top-left) + cards remaining (top-right) ----
-    _safe_addstr(win, 0, 2, rules_summary(session), curses.A_BOLD)
+    # ---- Header: short rules summary, centered over the table and highlighted ----
+    top_line = rules_summary(session)
+    _safe_addstr(win, 0, _center_x(top_line, TABLE_WIDTH), top_line, curses.color_pair(4) | curses.A_BOLD)
     cards_left = f"Cards Left: {session.shoe.cards_remaining}"
     _safe_addstr(win, 0, max(2, TABLE_WIDTH - len(cards_left)), cards_left, curses.A_DIM)
-
-    detail_line = f"{rules_detail(session)}   |   {side_bet_summary(session)}"
-    _safe_addstr(win, 1, 2, detail_line, curses.A_DIM)
 
     # ---- DEALER: value line, then cards (no "DEALER" label to save room) ----
     hide_hole = round_ is not None and not round_.dealer_revealed
     dealer_hand = round_.dealer_hand if round_ else Hand()
-    dealer_value_y = 3
+    dealer_value_y = 2
     if round_:
         value_text = _emph(hand_value_label(dealer_hand, hide_hole=hide_hole))
         _safe_addstr(win, dealer_value_y, _center_x(value_text, TABLE_WIDTH), value_text, curses.A_BOLD)
@@ -317,8 +317,11 @@ def render(
     cards_y = dealer_cards_y + CARD_H + 1
     value_y = cards_y + CARD_H
     status_y = value_y + 1
-    bet_row_a_y = status_y + 1  # Wager + Buster, side by side
-    bet_row_b_y = bet_row_a_y + 1  # Star21 + PP, side by side
+
+    # ---- Per-spot wager block: main wager row, side-bet header row, amounts ----
+    wager_row_y = status_y + 1
+    sidebet_header_y = wager_row_y + 1
+    sidebet_amount_y = sidebet_header_y + 1
 
     num_hands = session.rules.num_hands
     active = round_.current_player_hand() if round_ else None
@@ -346,17 +349,16 @@ def render(
                 is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
                 _safe_addstr(win, status_y, sub_x, status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
 
-        # Betting grid: always drawn for all three spots (regardless of how
-        # many hands are actually in play this round) so wagers stay visible
-        # and editable ahead of time; spots not in play this round are dimmed.
+        # Wager grid: always drawn for all three spots (regardless of how many
+        # hands are actually in play this round) so wagers stay visible and
+        # editable ahead of time; spots not in play this round are dimmed.
         dim = curses.A_DIM if i >= num_hands else 0
-        _draw_bet_cell(win, bet_row_a_y, col_x, PRIMARY_WIDTH, 0, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
-        _draw_bet_cell(win, bet_row_a_y, col_x + PRIMARY_WIDTH, PRIMARY_WIDTH, 1, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
-        _draw_bet_cell(win, bet_row_b_y, col_x, PRIMARY_WIDTH, 2, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
-        _draw_bet_cell(win, bet_row_b_y, col_x + PRIMARY_WIDTH, PRIMARY_WIDTH, 3, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
+        _draw_wager_cell(win, wager_row_y, col_x, SPOT_WIDTH, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
+        _draw_sidebet_headers(win, sidebet_header_y, col_x, SPOT_WIDTH)
+        _draw_sidebet_amounts(win, sidebet_amount_y, col_x, SPOT_WIDTH, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, dim)
 
     # ---- Action hint line ----
-    hint_y = bet_row_b_y + 2
+    hint_y = sidebet_amount_y + 2
     hint = ""
     if round_ is None:
         hint = "Arrows: move  |  digits: type amount  |  RETURN: confirm / deal"
@@ -385,25 +387,28 @@ def render(
     _safe_addstr(win, input_y, 2, f"> {buffer}")
 
     divider_y = input_y + 2
-    _, max_x = win.getmaxyx()
     _safe_addstr(win, divider_y, 0, "-" * max(max_x - 1, 0))
 
-    # ---- Stats panel: Lifetime vs Session, side by side ----
+    # ---- Stats panel: Lifetime (2x5) and Session (2x7), side by side ----
     stats_y = divider_y + 1
-    life_x = 2
-    session_x = 40
-    _safe_addstr(win, stats_y, life_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
-    _safe_addstr(win, stats_y, session_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
     life_rows = lifetime_stats_rows(session)
     session_rows = session_stats_rows(session)
-    for i, (label, value) in enumerate(life_rows):
-        _safe_addstr(win, stats_y + 1 + i, life_x, f"{label:<20}{value}")
-    for i, (label, value) in enumerate(session_rows):
-        _safe_addstr(win, stats_y + 1 + i, session_x, f"{label:<20}{value}")
+    life_a, life_b = life_rows[:5], life_rows[5:]
+    sess_a, sess_b = session_rows[:7], session_rows[7:]
 
-    max_rows = max(len(life_rows), len(session_rows))
+    life_a_x, life_b_x = 2, 38
+    sess_a_x, sess_b_x = 80, 116
+
+    _safe_addstr(win, stats_y, life_a_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
+    _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
+
+    for col_x, rows in ((life_a_x, life_a), (life_b_x, life_b), (sess_a_x, sess_a), (sess_b_x, sess_b)):
+        for i, (label, value) in enumerate(rows):
+            _safe_addstr(win, stats_y + 1 + i, col_x, f"{label:<18}{value}")
+
+    max_rows = max(len(life_a), len(life_b), len(sess_a), len(sess_b))
     footer_y = stats_y + 1 + max_rows + 1
-    _safe_addstr(win, footer_y, 2, "Type 'help' for the full command list, or 'quit' to exit.", curses.A_DIM)
+    _safe_addstr(win, footer_y, 2, "Type 'help' for commands, 'gamerules' for table rules, or 'quit' to exit.", curses.A_DIM)
 
     win.refresh()
 
@@ -416,11 +421,11 @@ def render_too_small(stdscr) -> None:
     stdscr.refresh()
 
 
-def render_help_screen(stdscr) -> None:
+def _render_overlay_lines(stdscr, title: str, lines: List[str]) -> None:
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
-    _safe_addstr(stdscr, 0, 2, "termjack -- Command Reference", curses.A_BOLD)
-    for i, line in enumerate(commands.HELP_LINES):
+    _safe_addstr(stdscr, 0, 2, title, curses.A_BOLD)
+    for i, line in enumerate(lines):
         y = 2 + i
         if y >= max_y - 2:
             break
@@ -429,6 +434,35 @@ def render_help_screen(stdscr) -> None:
     _safe_addstr(stdscr, max_y - 1, 2, "Press any key to return...", curses.A_DIM)
     stdscr.refresh()
     stdscr.getch()
+
+
+def render_help_screen(stdscr) -> None:
+    _render_overlay_lines(stdscr, "termjack -- Command Reference", commands.HELP_LINES)
+
+
+def render_gamerules_screen(stdscr, session: GameSession) -> None:
+    r = session.rules
+    table_range = f"${r.table_min:,.0f}-${r.table_max:,.0f}" if r.table_min > 0 else f"${r.table_max:,.0f} max"
+    lines = [
+        "GAME RULES",
+        f"  Decks:               {r.num_decks}",
+        f"  Penetration:         {r.penetration:.0%}",
+        f"  Blackjack pays:      {r.blackjack_payout_label()}",
+        f"  Dealer Soft 17:      {'Hits' if r.hit_soft_17 else 'Stands'}",
+        f"  Double After Split:  {'ON' if r.das else 'OFF'}",
+        f"  Resplit Aces:        {('ON (max ' + str(r.rsa_max_hands) + ' hands)') if r.rsa else 'OFF'}",
+        f"  Surrender:           {r.surrender.title()}",
+        f"  Split Max Hands:     {r.split_max_hands}",
+        f"  Table Limits:        {table_range}",
+        f"  Double Facedown:     {'ON' if r.double_facedown else 'OFF'}",
+        "",
+        "SIDE BETS",
+    ]
+    for key, label in (("power_poker", "Power Poker"), ("star21", "Star 21"), ("dealer_buster", "Dealer Buster")):
+        rule = getattr(r, key)
+        state = f"ON  (min ${rule.min_bet:,.0f}, max ${rule.max_bet:,.0f})" if rule.enabled else "off"
+        lines.append(f"  {label:<16} {state}")
+    _render_overlay_lines(stdscr, "termjack -- Game Rules", lines)
 
 
 def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> None:
@@ -452,6 +486,7 @@ def init_colors() -> None:
     curses.init_pair(1, curses.COLOR_RED, bg)
     curses.init_pair(2, curses.COLOR_WHITE, bg)
     curses.init_pair(3, curses.COLOR_BLUE, bg)
+    curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLUE)  # top rules line: white on blue
 
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
@@ -471,8 +506,12 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
 
 
 def _dispatch_command(raw: str, session: GameSession, stdscr) -> str:
-    if raw.strip().lower() in ("help", "?"):
+    stripped = raw.strip().lower()
+    if stripped in ("help", "?"):
         render_help_screen(stdscr)
+        return ""
+    if stripped == "gamerules":
+        render_gamerules_screen(stdscr, session)
         return ""
     return commands.handle_command(raw, session)
 
@@ -507,6 +546,19 @@ def _main(stdscr) -> None:
         amount = float(bet_edit_buffer)
         if bet_row == 0:
             err = session.try_set_wager(bet_col, amount)
+            if not err:
+                # Funding (or clearing) a spot via the grid is, on its own,
+                # enough to include (or exclude) it in the deal -- no separate
+                # 'hands N' step required to actually get it dealt.
+                if amount > 0:
+                    session.rules.num_hands = max(session.rules.num_hands, bet_col + 1)
+                elif bet_col + 1 == session.rules.num_hands:
+                    shrink_to = 1
+                    for j in range(bet_col - 1, -1, -1):
+                        if session.wagers[j] > 0:
+                            shrink_to = j + 1
+                            break
+                    session.rules.num_hands = shrink_to
         else:
             err = session.try_set_side_bet_wager(bet_col, ROW_KEYS[bet_row], amount)
         if err:
@@ -627,7 +679,8 @@ def _main(stdscr) -> None:
                     idx = rows.index(bet_row) if bet_row in rows else 0
                     bet_row = rows[min(len(rows) - 1, idx + 1)]
                     continue
-                if ord("0") <= ch <= ord("9") and buffer == "" and len(bet_edit_buffer) < 7:
+                max_len = WAGER_MAX_LEN if bet_row == 0 else SIDEBET_MAX_LEN
+                if ord("0") <= ch <= ord("9") and buffer == "" and len(bet_edit_buffer) < max_len:
                     bet_edit_buffer += chr(ch)
                     continue
                 if ch in (curses.KEY_BACKSPACE, 127, 8) and bet_edit_buffer:
