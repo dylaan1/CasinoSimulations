@@ -5,7 +5,7 @@ play and card counting. It runs in a `curses` TUI, deals against a
 configurable multi-deck shoe, and tracks a live Hi-Lo running/true count so
 you can rehearse bet-spread strategy against a realistic table.
 
-## Features
+## CLI-based Settings
 
 - **Full-screen curses UI**: launches maximized and centers the whole table
   (cards, wagers, results, stats) around whatever terminal size it gets.
