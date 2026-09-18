@@ -1,67 +1,103 @@
-# CasinoSimulations™ Blackjack
+# CasinoSimulations™ — cs-blackjack
 
-A desktop blackjack simulator that lets you configure casino rules, run Monte Carlo-style simulations, and visualize results. The app stores run data in SQLite and provides a Tkinter UI for exploring deals, bankroll changes, and saved seeds.
+A full-screen, terminal-based blackjack game built for practicing real-money
+play and card counting. It runs in a `curses` TUI, deals against a
+configurable multi-deck shoe, and tracks a live Hi-Lo running/true count so
+you can rehearse bet-spread strategy against a realistic table.
 
 ## Features
 
-- **Rule configuration**: adjust decks, penetration, payouts, soft-17 logic, double-after-split, split-aces logic, surrender rules, and base wager/bankroll.
-- **Strategy engine**: plug in JSON basic strategy tables (`hard`, `soft`, `pair`) to drive hit/stand/double/split/surrender decisions.
-- **Run analysis**: view per-deal results in the data table, including player hands (A–D for splits), dealer cards, running/true count, and bankroll changes.
-- **Statistics panel**: aggregate wins/losses/pushes, doubles, splits, surrenders, and average bankroll metrics.
-- **Bankroll chart**: plot profit/loss over hands played, filter by round, and hover for round summaries.
-- **Seed management**: save or discard runs, favorite seeds, reload saved data, and delete unneeded seeds from the Seed Manager.
-- **Test mode**: run simulations without writing to permanent tables for quick experimentation.
+- **Full-screen curses UI**: launches maximized and centers the whole table
+  (cards, wagers, results, stats) around whatever terminal size it gets.
+- **Configurable table rules**: number of decks and penetration, double after
+  split (DAS), resplit aces (RSA, with a configurable max resulting hands),
+  blackjack payout (3:2 or 6:5), surrender mode (late / early / off — early
+  surrender correctly restricted to Ace-only situations, with even money
+  offered instead on a player blackjack), dealer hits/stands on soft 17,
+  split max hands, table min/max wagers, and an optional face-down
+  double-down card.
+- **Multi-hand play**: bet and play 1–3 simultaneous hands per round, with
+  splits (up to the configured max, including resplit aces) tracked
+  independently per hand.
+- **Three side bets**, each with its own paytable and settlement line:
+  - **Power Poker** — your first two cards plus the dealer's up-card,
+    scored as a 3-card poker hand (trips, straight, flush, straight flush,
+    royal flush).
+  - **Star21** — the same three cards summed like a 21 total, with bonus
+    payouts for suited 20/21, suited/unsuited 6-7-8 and 7-7-7, and a 5000:1
+    jackpot for Suited 7-7-7♦.
+  - **Dealer Buster** — pays out when the dealer busts, scaled by how many
+    cards it took (up to 250:1 for an 8+ card bust).
+- **Live card counting**: running count and true count are always visible,
+  and the shoe reshuffle is deliberately deferred until you're back at the
+  betting screen between rounds (never mid-round), so a count you bet off
+  of is never invalidated partway through a hand.
+- **Bet spread table**: define your own true-count → hands/wager-per-hand
+  strategy in a dedicated full-screen table (`betspread`), edit it in place
+  with `betspread update <true count> <hands> <wager>`, and have it persist
+  across sessions.
+- **Bankroll and statistics**: lifetime bankroll, P/L $ and %, EV% (on main
+  wagers), win/loss/push counts, 8+ card dealer busts, and Star21 7-7-7♦
+  hits are tracked for life; a separate session panel tracks hands played,
+  doubles, splits, surrenders, and blackjacks dealt this session. Both are
+  saved to disk automatically.
+- **Shoe/session management**: `newshoe` and `newsession` commands (with a
+  confirmation step) to reshuffle or fully reset stats on demand.
+- **Full-screen reference screens**: `help` / `?` for the command list,
+  `gamerules` for the active table rules, `betspread` for your bet-spread
+  table — all one keypress away, no need to memorize anything up front.
 
 ## Requirements
 
-- Python 3.11+
-- Dependencies (installed via `pip`):
-  - `pandas`
-  - `matplotlib`
-  - `tkinter` (bundled with most Python distributions)
+- Python 3.9 or later
+- The standard library `curses` module — this ships with Python on Linux
+  and macOS; on Windows you'll need to `pip install windows-curses` first
+- A terminal that supports full-screen/maximize (the game sends a maximize
+  escape sequence on launch) and is at least **150x46** — it will refuse to
+  draw the table and show a "too small" message below that size
+
+No third-party packages are required to run the game itself.
 
 ## Download & Install
 
 ```bash
-git clone <your-repo-url>
+git clone <repo-url>
 cd CasinoSimulations
-pip install .
 ```
 
-Alternatively, for editable development installs:
-
-```bash
-pip install -e .
-```
+That's it — `cs-blackjack` is pure standard library, so there's nothing to
+`pip install`.
 
 ## Launch
 
-```bash
-python -m blackjack
-```
-
-The `blackjack-sim` console entry point is also available after installation:
+Run it as a module from the repository root:
 
 ```bash
-blackjack-sim
+python3 -m cs-blackjack
 ```
 
-### Test Mode
+The game maximizes your terminal window on launch. Your bankroll, lifetime
+stats, table rules, and bet spread table are saved to
+`~/.cs-blackjack_state.json` and reloaded automatically the next time you
+launch.
 
-Run without saving to the permanent SQLite tables:
+## Playing
 
-```bash
-python -m blackjack --test-mode
-```
-
-Or toggle **Test Mode** in the GUI settings. A red banner appears when test mode is active.
+- **Betting grid**: arrow keys move between the wager cells for each spot
+  (main wager plus the three side bets); type digits to set an amount for
+  the highlighted cell, then RETURN to confirm it (or to deal, once your
+  wagers are set).
+- **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
+  Surrender. Insurance/even money and early surrender prompts use their own
+  key hints shown on screen at the time.
+- **Commands**: type at the input line at the bottom of the screen. Run
+  `help` at any time for the full, up-to-date command reference — it covers
+  every rule toggle, bankroll/table-setup command, side bet configuration,
+  shoe/session controls, and the bet spread commands.
 
 ## Data Storage
 
-Simulation output is persisted to the configured SQLite database (`simulation.db` by default). Temporary tables are used for in-progress runs and are only saved when you click **Save**. The Seed Manager provides access to saved runs by seed ID.
-
-## Testing
-
-```bash
-pytest
-```
+All game state — bankroll, lifetime and session statistics, table rules,
+and your bet spread table — is persisted as JSON to
+`~/.cs-blackjack_state.json`. Delete that file to reset everything back to
+defaults.
