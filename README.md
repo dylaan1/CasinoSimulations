@@ -32,20 +32,25 @@ you can rehearse bet-spread strategy against a realistic table.
   and the shoe reshuffle is deliberately deferred until you're back at the
   betting screen between rounds (never mid-round), so a count you bet off
   of is never invalidated partway through a hand.
-- **Bet spread table**: define your own true-count → hands/wager-per-hand
-  strategy in a dedicated full-screen table (`betspread`), edit it in place
-  with `betspread update <true count> <hands> <wager>`, and have it persist
-  across sessions.
-- **Bankroll and statistics**: lifetime bankroll, P/L $ and %, EV% (on main
-  wagers), win/loss/push counts, 8+ card dealer busts, and Star21 7-7-7♦
-  hits are tracked for life; a separate session panel tracks hands played,
-  doubles, splits, surrenders, and blackjacks dealt this session. Both are
-  saved to disk automatically.
+- **Bet spread reference**: a full-screen `betspread` table with $10/$25/$100
+  minimum-table variants, each showing 1:10, 1:12, and 1:15 spreads by true
+  count, as a quick reference while you play.
+- **Bankroll and statistics**: a lifetime panel (main-bet P/L $, side-bet
+  P/L $, EV% on main wagers, hands played, wins/losses/pushes/surrenders,
+  8+ card dealer busts, and Star21 7-7-7♦ hits) and a session panel
+  (bankroll, main/side-bet P/L $, hands played, wins/losses/pushes,
+  surrenders, doubles, splits, and blackjacks dealt this session). Both are
+  saved to disk automatically; `hardreset` (with a typed `confirm`) wipes
+  the lifetime panel back to zero without touching your bankroll or session
+  stats.
 - **Shoe/session management**: `newshoe` and `newsession` commands (with a
   confirmation step) to reshuffle or fully reset stats on demand.
+- **Mouse or keyboard**: the betting grid's wager and side-bet cells can be
+  clicked directly, in addition to arrow-key navigation.
 - **Full-screen reference screens**: `help` / `?` for the command list,
-  `gamerules` for the active table rules, `betspread` for your bet-spread
-  table — all one keypress away, no need to memorize anything up front.
+  `gamerules` for the active table rules, `betspread` for the bet-spread
+  reference tables — all one keypress away, no need to memorize anything
+  up front.
 
 ## Requirements
 
@@ -53,8 +58,10 @@ you can rehearse bet-spread strategy against a realistic table.
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **150x46** — it will refuse to
-  draw the table and show a "too small" message below that size
+  escape sequence on launch) and is at least **402x48** — the layout uses a
+  fixed side margin and reserves room for a fully split 12-hand table, so it
+  needs a genuinely wide terminal; it will refuse to draw the table and show
+  a "too small" message below that size
 
 No third-party packages are required to run the game itself.
 
@@ -77,27 +84,25 @@ python3 -m cs-blackjack
 ```
 
 The game maximizes your terminal window on launch. Your bankroll, lifetime
-stats, table rules, and bet spread table are saved to
-`~/.cs-blackjack_state.json` and reloaded automatically the next time you
-launch.
+and session stats, and table rules are saved to `~/.cs-blackjack_state.json`
+and reloaded automatically the next time you launch.
 
 ## Playing
 
-- **Betting grid**: arrow keys move between the wager cells for each spot
-  (main wager plus the three side bets); type digits to set an amount for
-  the highlighted cell, then RETURN to confirm it (or to deal, once your
-  wagers are set).
+- **Betting grid**: arrow keys (or a mouse click) move between the wager
+  cells for each spot (main wager plus the three side bets); type digits to
+  set an amount for the highlighted cell, then RETURN to confirm it (or to
+  deal, once your wagers are set).
 - **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
   Surrender. Insurance/even money and early surrender prompts use their own
   key hints shown on screen at the time.
 - **Commands**: type at the input line at the bottom of the screen. Run
   `help` at any time for the full, up-to-date command reference — it covers
   every rule toggle, bankroll/table-setup command, side bet configuration,
-  shoe/session controls, and the bet spread commands.
+  and shoe/session controls.
 
 ## Data Storage
 
-All game state — bankroll, lifetime and session statistics, table rules,
-and your bet spread table — is persisted as JSON to
-`~/.cs-blackjack_state.json`. Delete that file to reset everything back to
-defaults.
+All game state — bankroll, lifetime and session statistics, and table rules
+— is persisted as JSON to `~/.cs-blackjack_state.json`. Delete that file to
+reset everything back to defaults.
