@@ -8,7 +8,7 @@ from .betspread import BetSpreadTable
 from .rules import Rules
 from .stats import Stats
 
-STATE_PATH = Path.home() / ".termjack_state.json"
+STATE_PATH = Path.home() / ".cs-blackjack_state.json"
 DEFAULT_BANKROLL = 10_000.0
 SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
 

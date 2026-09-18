@@ -503,7 +503,7 @@ def render(
 def render_too_small(stdscr) -> None:
     stdscr.erase()
     lines, cols = stdscr.getmaxyx()
-    msg = f"termjack needs a full-screen (or at least {MIN_COLS}x{MIN_LINES}) terminal -- currently {cols}x{lines}."
+    msg = f"cs-blackjack needs a full-screen (or at least {MIN_COLS}x{MIN_LINES}) terminal -- currently {cols}x{lines}."
     _safe_addstr(stdscr, min(1, lines - 1), 0, msg)
     stdscr.refresh()
 
@@ -524,7 +524,7 @@ def _render_overlay_lines(stdscr, title: str, lines: List[str]) -> None:
 
 
 def render_help_screen(stdscr) -> None:
-    _render_overlay_lines(stdscr, "termjack -- Command Reference", commands.HELP_LINES)
+    _render_overlay_lines(stdscr, "cs-blackjack -- Command Reference", commands.HELP_LINES)
 
 
 def render_gamerules_screen(stdscr, session: GameSession) -> None:
@@ -549,7 +549,7 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         rule = getattr(r, key)
         state = f"ON  (min ${rule.min_bet:,.0f}, max ${rule.max_bet:,.0f})" if rule.enabled else "off"
         lines.append(f"  {label:<16} {state}")
-    _render_overlay_lines(stdscr, "termjack -- Game Rules", lines)
+    _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
 
 
 def render_betspread_screen(stdscr, session: GameSession) -> None:
@@ -566,7 +566,7 @@ def render_betspread_screen(stdscr, session: GameSession) -> None:
             lines.append(f"  {tc_label:<16}{r.hands:<12}{money(r.wager_per_hand):<14}")
     lines.append("")
     lines.append("  betspread update <true_count> <hands> <wager>  to add/change a row")
-    _render_overlay_lines(stdscr, "termjack -- Bet Spread", lines)
+    _render_overlay_lines(stdscr, "cs-blackjack -- Bet Spread", lines)
 
 
 def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> None:
@@ -637,7 +637,7 @@ def _main(stdscr) -> None:
 
     round_: Optional[Round] = None
     buffer = ""
-    message = "Welcome to termjack. Type 'help' for the command list."
+    message = "Welcome to cs-blackjack. Type 'help' for the command list."
 
     bet_row = 0
     bet_col = 0

@@ -1,25 +1,103 @@
-# CasinoSimulations™ Blackjack
+# CasinoSimulations™ — cs-blackjack
 
-A macOS blackjack game and statistics engine run inside of your Mac Terminal. The player is presented with the option of playing up to three hands of blackjack at once, plus any of a number of side bets that payout according to a pre-determined set of rules. As you play, your lifetime statistics will be tracked so you can watch your bankroll grow over time and have an idea of how much you are earning per hour. The engine also tracks per-game statistics, available for our superstitious players who like to see the numbers when they believe their next big hand is about to come.
+A full-screen, terminal-based blackjack game built for practicing real-money
+play and card counting. It runs in a `curses` TUI, deals against a
+configurable multi-deck shoe, and tracks a live Hi-Lo running/true count so
+you can rehearse bet-spread strategy against a realistic table.
 
 ## CLI-based Settings
 
-Settings are modulated with the CLI through the use of different commands. These different commands allow the player to set the rules of their blackjack experience. These rules include:
-- Adjustable number of decks (max 16)
-- Modular deck penetration
-- Blackjack payouts of 3:2 and 6:5
-- Dealer S17 or H17 logic
-- Double After Split on/off
-- Re-Splitting Aces on/off
-- Surrender early, late, or not at all
-- Set or add to Player Bankroll
+- **Full-screen curses UI**: launches maximized and centers the whole table
+  (cards, wagers, results, stats) around whatever terminal size it gets.
+- **Configurable table rules**: number of decks and penetration, double after
+  split (DAS), resplit aces (RSA, with a configurable max resulting hands),
+  blackjack payout (3:2 or 6:5), surrender mode (late / early / off — early
+  surrender correctly restricted to Ace-only situations, with even money
+  offered instead on a player blackjack), dealer hits/stands on soft 17,
+  split max hands, table min/max wagers, and an optional face-down
+  double-down card.
+- **Multi-hand play**: bet and play 1–3 simultaneous hands per round, with
+  splits (up to the configured max, including resplit aces) tracked
+  independently per hand.
+- **Three side bets**, each with its own paytable and settlement line:
+  - **Power Poker** — your first two cards plus the dealer's up-card,
+    scored as a 3-card poker hand (trips, straight, flush, straight flush,
+    royal flush).
+  - **Star21** — the same three cards summed like a 21 total, with bonus
+    payouts for suited 20/21, suited/unsuited 6-7-8 and 7-7-7, and a 5000:1
+    jackpot for Suited 7-7-7♦.
+  - **Dealer Buster** — pays out when the dealer busts, scaled by how many
+    cards it took (up to 250:1 for an 8+ card bust).
+- **Live card counting**: running count and true count are always visible,
+  and the shoe reshuffle is deliberately deferred until you're back at the
+  betting screen between rounds (never mid-round), so a count you bet off
+  of is never invalidated partway through a hand.
+- **Bet spread table**: define your own true-count → hands/wager-per-hand
+  strategy in a dedicated full-screen table (`betspread`), edit it in place
+  with `betspread update <true count> <hands> <wager>`, and have it persist
+  across sessions.
+- **Bankroll and statistics**: lifetime bankroll, P/L $ and %, EV% (on main
+  wagers), win/loss/push counts, 8+ card dealer busts, and Star21 7-7-7♦
+  hits are tracked for life; a separate session panel tracks hands played,
+  doubles, splits, surrenders, and blackjacks dealt this session. Both are
+  saved to disk automatically.
+- **Shoe/session management**: `newshoe` and `newsession` commands (with a
+  confirmation step) to reshuffle or fully reset stats on demand.
+- **Full-screen reference screens**: `help` / `?` for the command list,
+  `gamerules` for the active table rules, `betspread` for your bet-spread
+  table — all one keypress away, no need to memorize anything up front.
 
 ## Requirements
 
+- Python 3.9 or later
+- The standard library `curses` module — this ships with Python on Linux
+  and macOS; on Windows you'll need to `pip install windows-curses` first
+- A terminal that supports full-screen/maximize (the game sends a maximize
+  escape sequence on launch) and is at least **150x46** — it will refuse to
+  draw the table and show a "too small" message below that size
+
+No third-party packages are required to run the game itself.
 
 ## Download & Install
 
+```bash
+git clone <repo-url>
+cd CasinoSimulations
+```
+
+That's it — `cs-blackjack` is pure standard library, so there's nothing to
+`pip install`.
 
 ## Launch
 
+Run it as a module from the repository root:
 
+```bash
+python3 -m cs-blackjack
+```
+
+The game maximizes your terminal window on launch. Your bankroll, lifetime
+stats, table rules, and bet spread table are saved to
+`~/.cs-blackjack_state.json` and reloaded automatically the next time you
+launch.
+
+## Playing
+
+- **Betting grid**: arrow keys move between the wager cells for each spot
+  (main wager plus the three side bets); type digits to set an amount for
+  the highlighted cell, then RETURN to confirm it (or to deal, once your
+  wagers are set).
+- **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
+  Surrender. Insurance/even money and early surrender prompts use their own
+  key hints shown on screen at the time.
+- **Commands**: type at the input line at the bottom of the screen. Run
+  `help` at any time for the full, up-to-date command reference — it covers
+  every rule toggle, bankroll/table-setup command, side bet configuration,
+  shoe/session controls, and the bet spread commands.
+
+## Data Storage
+
+All game state — bankroll, lifetime and session statistics, table rules,
+and your bet spread table — is persisted as JSON to
+`~/.cs-blackjack_state.json`. Delete that file to reset everything back to
+defaults.
