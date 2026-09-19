@@ -212,6 +212,19 @@ def draw_card(win, y: int, x: int, card: Optional[Card], face_down: bool = False
         _safe_addstr(win, y + i, x, line, color)
 
 
+def _card_block_width(hand: Hand) -> int:
+    """Actual on-screen width of a hand's fanned card row as currently
+    drawn -- i.e. draw_hand()'s footprint for however many cards it has
+    right now (capped at MAX_CARDS_IN_GRID, same as draw_hand itself),
+    not the worst-case 12-card width. Used to keep a hand's cards
+    centered on their actual width as it grows, rather than left-biased
+    inside a slot sized for the maximum possible hand."""
+    n = min(len(hand.cards), MAX_CARDS_IN_GRID)
+    if n <= 0:
+        return 0
+    return CARD_W + FAN_OFFSET * (n - 1)
+
+
 def draw_hand(win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False) -> None:
     last_index = len(hand.cards) - 1
     for i, card in enumerate(hand.cards):
@@ -624,7 +637,11 @@ def render(
     y += 1
 
     dealer_cards_base_y = y
-    dealer_x = left_margin + max(0, (usable_width - CARD_ROW_WIDTH) // 2)
+    # Center on the dealer's actual card count as it grows (not a slot
+    # sized for the worst-case 12-card hand), so the row stays centered
+    # under the dealer's value line -- and the screen -- as they draw,
+    # instead of sitting left-biased inside a too-wide fixed slot.
+    dealer_x = left_margin + max(0, (usable_width - _card_block_width(dealer_hand)) // 2)
     if round_:
         draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole)
     y += CARD_BLOCK_HEIGHT
