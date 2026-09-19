@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
-from .betspread import BetSpreadTable
 from .cards import Card, Shoe
 from .dealer import play_dealer_hand
 from .hand import Hand
@@ -99,12 +98,10 @@ class GameSession:
         stats: Stats,
         wagers: Optional[List[float]] = None,
         side_bet_wagers: Optional[List[Dict[str, float]]] = None,
-        bet_spread: Optional[BetSpreadTable] = None,
     ):
         self.rules = rules
         self.bankroll = bankroll
         self.stats = stats
-        self.bet_spread = bet_spread if bet_spread is not None else BetSpreadTable()
         self.shoe = Shoe(rules.num_decks, rules.penetration)
         self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
         self.side_bet_wagers: List[Dict[str, float]] = (
@@ -114,6 +111,7 @@ class GameSession:
         )
         self._quit = False
         self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession", awaiting a RETURN to confirm
+        self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
 
     def adjust_bankroll(self, amount: float) -> None:
         self.bankroll += amount

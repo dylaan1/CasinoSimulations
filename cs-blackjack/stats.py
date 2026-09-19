@@ -8,28 +8,26 @@ from typing import Optional
 class Stats:
     """Lifetime counters (persisted across runs) plus this-session bookkeeping.
 
-    Lifetime: bankroll growth (P/L $ and %), EV% (realized edge on main
+    Lifetime: main-wager P/L $, side-bet P/L $, EV% (realized edge on main
     blackjack wagers only -- side bets have very different variance and
-    would muddy that number), win/loss/push tallies, and total hands ever
-    played.
+    would muddy that number), win/loss/push/surrender tallies, and total
+    hands ever played.
 
-    Session (reset every run): hands played this session, doubles, splits,
-    surrenders, blackjacks dealt to either side. Running/true count aren't
-    tracked here -- they live on the Shoe and are inherently session-local.
+    Session (reset every run): the same shape as lifetime, plus doubles,
+    splits, and blackjacks dealt to either side.
     """
-
-    lifetime_starting_bankroll: float = 0.0  # captured once, ever; never touched again
 
     hands_lifetime: int = 0
     player_wins: int = 0
     dealer_wins: int = 0
     pushes: int = 0
+    surrenders_lifetime: int = 0
     dealer_busts_8plus: int = 0  # dealer busts on an 8th (or later) card
     blazing_sevens: int = 0  # Star 21 hits on Suited 7-7-7 Diamonds
 
     lifetime_main_wagered: float = 0.0  # sum of main-hand bets settled, for EV%
-    lifetime_main_pl: float = 0.0  # main-hand payouts minus bets, for EV%
-    lifetime_sidebet_pl: float = 0.0  # side bet net, folded into P/L $ but not EV%
+    lifetime_main_pl: float = 0.0
+    lifetime_sidebet_pl: float = 0.0
 
     hands_this_session: int = 0
     surrenders: int = 0
@@ -38,8 +36,8 @@ class Stats:
     player_blackjacks: int = 0
     dealer_blackjacks: int = 0
 
-    session_wagered: float = 0.0  # every dollar risked this session (main + side + insurance)
-    session_pl: float = 0.0
+    session_main_pl: float = 0.0
+    session_sidebet_pl: float = 0.0
     session_player_wins: int = 0
     session_dealer_wins: int = 0
     session_pushes: int = 0
@@ -48,9 +46,9 @@ class Stats:
         self.hands_lifetime += 1
         self.hands_this_session += 1
         self.lifetime_main_wagered += bet
-        self.lifetime_main_pl += payout - bet
-        self.session_wagered += bet
-        self.session_pl += payout - bet
+        pl = payout - bet
+        self.lifetime_main_pl += pl
+        self.session_main_pl += pl
         if outcome == "player_win":
             self.player_wins += 1
             self.session_player_wins += 1
@@ -62,11 +60,12 @@ class Stats:
             self.session_pushes += 1
         elif outcome == "surrender":
             self.surrenders += 1
+            self.surrenders_lifetime += 1
 
     def record_side_bet(self, wager: float, win_amount: float) -> None:
-        self.lifetime_sidebet_pl += win_amount - wager
-        self.session_wagered += wager
-        self.session_pl += win_amount - wager
+        pl = win_amount - wager
+        self.lifetime_sidebet_pl += pl
+        self.session_sidebet_pl += pl
 
     def record_double(self) -> None:
         self.doubles += 1
@@ -94,24 +93,24 @@ class Stats:
         self.splits = 0
         self.player_blackjacks = 0
         self.dealer_blackjacks = 0
-        self.session_wagered = 0.0
-        self.session_pl = 0.0
+        self.session_main_pl = 0.0
+        self.session_sidebet_pl = 0.0
         self.session_player_wins = 0
         self.session_dealer_wins = 0
         self.session_pushes = 0
 
-    def session_pl_percent(self) -> float:
-        if self.session_wagered <= 0:
-            return 0.0
-        return self.session_pl / self.session_wagered * 100.0
-
-    def lifetime_pl_dollars(self) -> float:
-        return self.lifetime_main_pl + self.lifetime_sidebet_pl
-
-    def lifetime_pl_percent(self) -> float:
-        if self.lifetime_starting_bankroll <= 0:
-            return 0.0
-        return self.lifetime_pl_dollars() / self.lifetime_starting_bankroll * 100.0
+    def reset_lifetime(self) -> None:
+        """Zero every lifetime-scoped counter; session counters are untouched."""
+        self.hands_lifetime = 0
+        self.player_wins = 0
+        self.dealer_wins = 0
+        self.pushes = 0
+        self.surrenders_lifetime = 0
+        self.dealer_busts_8plus = 0
+        self.blazing_sevens = 0
+        self.lifetime_main_wagered = 0.0
+        self.lifetime_main_pl = 0.0
+        self.lifetime_sidebet_pl = 0.0
 
     def ev_percent(self) -> Optional[float]:
         if self.lifetime_main_wagered <= 0:
@@ -120,11 +119,11 @@ class Stats:
 
     def to_dict(self) -> dict:
         return {
-            "lifetime_starting_bankroll": self.lifetime_starting_bankroll,
             "hands_lifetime": self.hands_lifetime,
             "player_wins": self.player_wins,
             "dealer_wins": self.dealer_wins,
             "pushes": self.pushes,
+            "surrenders_lifetime": self.surrenders_lifetime,
             "dealer_busts_8plus": self.dealer_busts_8plus,
             "blazing_sevens": self.blazing_sevens,
             "lifetime_main_wagered": self.lifetime_main_wagered,
@@ -135,11 +134,11 @@ class Stats:
     @classmethod
     def from_dict(cls, data: dict) -> "Stats":
         stats = cls()
-        stats.lifetime_starting_bankroll = float(data.get("lifetime_starting_bankroll", 0.0))
         stats.hands_lifetime = int(data.get("hands_lifetime", 0))
         stats.player_wins = int(data.get("player_wins", 0))
         stats.dealer_wins = int(data.get("dealer_wins", 0))
         stats.pushes = int(data.get("pushes", 0))
+        stats.surrenders_lifetime = int(data.get("surrenders_lifetime", 0))
         stats.dealer_busts_8plus = int(data.get("dealer_busts_8plus", 0))
         stats.blazing_sevens = int(data.get("blazing_sevens", 0))
         stats.lifetime_main_wagered = float(data.get("lifetime_main_wagered", 0.0))

@@ -39,16 +39,15 @@ HELP_LINES = [
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
     "  newsession                     Reset shoe + session stats (RETURN confirms)",
+    "  hardreset                      Reset LIFETIME stats to zero (type 'confirm')",
     "",
     "BET SPREAD",
-    "  betspread                      Show your true-count bet spread table",
-    "  betspread update <tc> <hands> <wager>",
-    "                                 Set the hands/wager for a true count tier",
+    "  betspread                      Show the $10/$25/$100 bet spread reference tables",
     "",
     "WAGERS",
-    "  Arrow keys move around the betting grid; type digits to set an",
-    "  amount for the highlighted cell; RETURN confirms it (or deals,",
-    "  if nothing is pending).",
+    "  Arrow keys (or a mouse click) move around the betting grid; type",
+    "  digits to set an amount for the highlighted cell; RETURN confirms",
+    "  it (or deals, if nothing is pending).",
     "",
     "IN-ROUND KEYS",
     "  SPACE Hit   RETURN Stand   D Double   P Split   S Surrender",
@@ -58,6 +57,7 @@ HELP_LINES = [
     "MISC",
     "  help | ?                       Show this screen",
     "  gamerules                      Show the full table-rules screen",
+    "  stats                          Show the lifetime/session stats screen",
     "  quit | exit                    Quit cs-blackjack",
 ]
 
@@ -71,6 +71,12 @@ def handle_command(raw: str, session: "GameSession") -> str:
     raw = raw.strip()
     if not raw:
         return ""
+    if session.pending_hard_reset:
+        session.pending_hard_reset = False
+        if raw.lower() == "confirm":
+            session.stats.reset_lifetime()
+            return "Lifetime stats reset to zero."
+        return "Hard reset cancelled."
     try:
         tokens = shlex.split(raw.lower())
     except ValueError as exc:
@@ -218,8 +224,9 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         session.pending_confirmation = "newsession"
         return "Press RETURN to reset the shoe AND session stats (any other key cancels)."
 
-    if head == "betspread":
-        return _betspread_command(rest, session)
+    if head == "hardreset":
+        session.pending_hard_reset = True
+        return "Type 'confirm' to permanently reset ALL lifetime stats to zero (anything else cancels)."
 
     if head in ("help", "?"):
         return HELP_TEXT
@@ -281,18 +288,3 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
         f"{label}: {'ON' if target.enabled else 'OFF'} "
         f"(min ${target.min_bet:,.2f}, max ${target.max_bet:,.2f})"
     )
-
-
-def _betspread_command(rest: List[str], session: "GameSession") -> str:
-    usage = "Usage: betspread update <true_count> <hands> <wager>"
-    if not rest or rest[0] != "update":
-        raise CommandError(usage)
-    tc = _parse_float(_require(rest, 1, usage), "true_count")
-    hands = _parse_int(_require(rest, 2, usage), "hands")
-    if not (1 <= hands <= 3):
-        raise CommandError("hands must be 1, 2, or 3")
-    wager = _parse_float(_require(rest, 3, usage), "wager")
-    if wager <= 0:
-        raise CommandError("wager must be positive")
-    session.bet_spread.upsert(tc, hands, wager)
-    return f"Bet spread: TC {tc:+.1f} -> {hands} hand(s) @ ${wager:,.2f}/hand"
