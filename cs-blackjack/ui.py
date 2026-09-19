@@ -11,26 +11,18 @@ from .hand import Hand
 
 # ---- Card art / hand-stacking geometry ----
 # Only one hand per spot is ever shown at full size (see the "active hand"
-# logic below), so a hand can afford real 7x5 cards fanned with some
-# horizontal overlap -- up to 4 cards per row. A 5th+ card starts a new row
-# stacked on top of (drawn after, so it visually covers) the row below it,
-# staggered a little down and to the right for a diagonal, dealt-at-a-table
-# look; up to 3 rows (12 cards) are shown this way. Cards beyond 12 (which a
-# player will in practice basically never reach without busting) fall back
-# to compact colored rank+suit chips on their own line instead of a 4th
-# stacked row.
+# logic below), so a hand can afford real 7x5 cards fanned with a
+# horizontal overlap in a single row, up to a 12-card visual limit. A 13th+
+# card (all but statistically impossible without busting first) falls back
+# to a rolling ticker of compact colored rank+suit chips on the line right
+# below -- a backup path, not something expected to ever actually show up
+# in practice.
 CARD_H = 5
 CARD_W = 7
-FAN_OFFSET = 3  # horizontal step between cards within the same row
-CARDS_PER_ROW = 4
-MAX_CARD_ROWS = 3  # 3 rows x 4 cards = 12 cards shown as real cards
-GROUP_DX = 0  # extra rightward creep per stacked row (0 keeps rows column-aligned, which
-# reads far more cleanly than a diagonal creep once combined with the within-row fan --
-# two similar-magnitude diagonal offsets at once just crisscross and get hard to read)
-GROUP_DY = 1  # rows each subsequent stacked row is staggered downward
-MAX_CARDS_IN_GRID = CARDS_PER_ROW * MAX_CARD_ROWS  # 12
-CARD_ROW_WIDTH = CARD_W + FAN_OFFSET * (CARDS_PER_ROW - 1) + GROUP_DX * (MAX_CARD_ROWS - 1)
-CARD_BLOCK_HEIGHT = CARD_H + GROUP_DY * (MAX_CARD_ROWS - 1)  # reserved rows for a 12-card hand
+FAN_OFFSET = 3  # horizontal step between cards within the row
+MAX_CARDS_IN_GRID = 12  # visual limit; cards beyond this go to the overflow ticker
+CARD_ROW_WIDTH = CARD_W + FAN_OFFSET * (MAX_CARDS_IN_GRID - 1)
+CARD_BLOCK_HEIGHT = CARD_H
 
 # ---- Table geometry ----
 MARGIN_COLS = 12  # ~1.0in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
@@ -47,13 +39,13 @@ MIN_COLS = 2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS
 
 # ---- Vertical content budget ----
 # Rows, top to bottom: header(2) + blank(1) + dealer value/status(2) +
-# dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-chip row(1) +
+# dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-ticker row(1) +
 # buffer(2) + player value row(1) + player status(1) + player cards
-# (CARD_BLOCK_HEIGHT) + player overflow-chip row(1) + main wager box(3) +
-# buffer(1) + side-bet titles(1) + side-bet boxes(3) + 4 result rows(4) +
-# hint/message(1) + blank(1) + input(1).
+# (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + main wager box(3) +
+# main wager payout row(1) + side-bet titles(1) + side-bet boxes(3) +
+# side-bet win/payout banner row(1) + hint/message(1) + blank(1) + input(1).
 CONTENT_HEIGHT = (
-    2 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 4
+    2 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 1
     + 1 + 1 + 1
 )
 MIN_LINES = CONTENT_HEIGHT + 1
@@ -107,6 +99,36 @@ BET_SPREAD_TABLES: List[Tuple[str, List[Tuple[str, str, str, str]]]] = [
         ("+3", "$600", "$600", "$800"),
         ("+4", "$800", "$900", "$1200"),
         ("+5 or higher", "$1000", "$1200", "$1500"),
+    ]),
+]
+
+# Side-bet paytables, mirroring the odds in sidebets.py's evaluators.
+PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
+    ("Power Poker", [
+        ("Royal Flush", "50:1"),
+        ("Straight Flush", "30:1"),
+        ("Flush", "15:1"),
+        ("Straight", "9:1"),
+        ("Trips", "3:1"),
+    ]),
+    ("Star 21", [
+        ("Suited 7-7-7♦", "5000:1"),
+        ("Suited 7-7-7", "500:1"),
+        ("Suited 6-7-8", "100:1"),
+        ("Suited 21", "40:1"),
+        ("Unsuited 7-7-7", "20:1"),
+        ("Unsuited 6-7-8", "15:1"),
+        ("Unsuited 21", "5:1"),
+        ("Any 20", "3:1"),
+        ("Any 19", "2:1"),
+    ]),
+    ("Dealer Buster", [
+        ("Dealer busts on 3 cards", "2:1"),
+        ("Dealer busts on 4 cards", "3:1"),
+        ("Dealer busts on 5 cards", "12:1"),
+        ("Dealer busts on 6 cards", "50:1"),
+        ("Dealer busts on 7 cards", "100:1"),
+        ("Dealer busts on 8+ cards", "250:1"),
     ]),
 ]
 
@@ -175,59 +197,39 @@ def draw_card(win, y: int, x: int, card: Optional[Card], face_down: bool = False
         _safe_addstr(win, y + i, x, line, color)
 
 
-def _card_slot_offset(index: int) -> Optional[Tuple[int, int]]:
-    """(dx, dy) for the index'th card in a hand's fan/stack, or None once
-    the 12-card grid is full (those cards render as overflow chips
-    instead). Cards 0-3 fan out with a horizontal overlap; every
-    subsequent row of 4 is drawn after (so it visually sits on top of) the
-    row below it, staggered GROUP_DY rows down and GROUP_DX columns right."""
-    if index >= MAX_CARDS_IN_GRID:
-        return None
-    row, slot = divmod(index, CARDS_PER_ROW)
-    return slot * FAN_OFFSET + row * GROUP_DX, row * GROUP_DY
-
-
 def draw_hand(win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False) -> None:
     last_index = len(hand.cards) - 1
     for i, card in enumerate(hand.cards):
-        offset = _card_slot_offset(i)
-        if offset is None:
-            continue  # drawn separately as an overflow chip -- see _draw_overflow_chips
-        dx, dy = offset
+        if i >= MAX_CARDS_IN_GRID:
+            break  # rendered separately as an overflow-ticker chip -- see _draw_overflow_chips
         face_down = (hide_hole and i == 1) or (hide_last and i == last_index)
-        draw_card(win, base_y + dy, x + dx, card, face_down=face_down)
-
-    # If the frontmost row (the one on top in z-order) has fewer than
-    # CARDS_PER_ROW cards, blank out the rest of that row's width so an
-    # older, covered row's cards don't peek through into what should read
-    # as empty space to the right of the last real card.
-    grid_n = min(len(hand.cards), MAX_CARDS_IN_GRID)
-    if grid_n > CARDS_PER_ROW:
-        last_row, filled = divmod(grid_n - 1, CARDS_PER_ROW)
-        filled += 1
-        if filled < CARDS_PER_ROW:
-            dy = last_row * GROUP_DY
-            last_card_dx = (filled - 1) * FAN_OFFSET + last_row * GROUP_DX
-            blank_x = x + last_card_dx + CARD_W
-            blank_w = CARD_ROW_WIDTH - (last_card_dx + CARD_W)
-            if blank_w > 0:
-                for r in range(CARD_H):
-                    _safe_addstr(win, base_y + dy + r, blank_x, " " * blank_w)
+        draw_card(win, base_y, x + i * FAN_OFFSET, card, face_down=face_down)
 
 
 def _draw_overflow_chips(win, y: int, x: int, width: int, hand: Hand, hide_last: bool = False) -> None:
-    """Cards past the 12-card grid (all but statistically impossible in
-    real play) as compact colored rank+suit chips on their own line."""
+    """Cards past the 12-card visual limit (all but statistically
+    impossible in real play without busting first -- a backup path, not
+    something expected to actually appear) as a rolling ticker of compact
+    colored rank+suit chips: as more cards are pulled, older ones scroll
+    out of view to the left to make room, with a '+N' counter for however
+    many are currently off-screen."""
     if len(hand.cards) <= MAX_CARDS_IN_GRID:
         return
+    overflow = list(enumerate(hand.cards[MAX_CARDS_IN_GRID:], start=MAX_CARDS_IN_GRID))
     last_index = len(hand.cards) - 1
+    chip_w = 3  # 2-char rank+suit tag, plus a 1-col gap
+    max_fit = max(1, width // chip_w)
+    visible = overflow[-max_fit:]
+    hidden = len(overflow) - len(visible)
+
     cx = x
-    for i in range(MAX_CARDS_IN_GRID, len(hand.cards)):
-        card = hand.cards[i]
-        if hide_last and i == last_index:
-            tag = "??"
-        else:
-            tag = f"{card.short_rank}{card.glyph}"
+    if hidden > 0:
+        marker = f"+{hidden} "
+        if cx + len(marker) <= x + width:
+            _safe_addstr(win, y, cx, marker, curses.A_DIM)
+            cx += len(marker)
+    for i, card in visible:
+        tag = "??" if (hide_last and i == last_index) else f"{card.short_rank}{card.glyph}"
         if cx + len(tag) > x + width:
             break
         _safe_addstr(win, y, cx, tag, _card_color(card))
@@ -429,22 +431,66 @@ def _spot_payout_text(round_: Optional[Round], spot_index: int) -> str:
     return f"(${total:,.2f} returned)"
 
 
-def _sidebet_result_text(round_: Optional[Round], spot: Spot, key: str) -> str:
-    if round_ is None:
-        return ""
-    wager = spot.side_bet_wagers.get(key, 0.0)
-    if wager <= 0:
-        return ""
-    if round_.phase == Phase.SETTLED:
+_SIDEBET_KEYS_ORDERED = ("power_poker", "star21", "dealer_buster")
+_SIDEBET_SHORT_LABELS = {"power_poker": "PP", "star21": "S21"}
+
+
+def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, float]]:
+    """[(label, win_amount), ...] for this spot's side bets that actually
+    won this round, in PP/S21/BUST order."""
+    if round_.phase != Phase.SETTLED:
+        return []
+    wins: List[Tuple[str, float]] = []
+    for key in _SIDEBET_KEYS_ORDERED:
         display_name = SIDE_BET_LABELS[key]
         for sb in round_.side_bet_results:
-            if sb.spot_index == spot.index and sb.name == display_name:
-                return f"(${sb.win_amount:,.2f} returned)"
+            if sb.spot_index == spot.index and sb.name == display_name and sb.win_amount > 0:
+                wins.append((sb.label or display_name, sb.win_amount))
+    return wins
+
+
+def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[str]:
+    """Frames for the settlement flash animation: each winning side bet's
+    label, then its payout, in turn; if more than one side bet won, a
+    final frame with the combined total."""
+    wins = _spot_sidebet_wins(round_, spot)
+    if not wins:
+        return []
+    frames: List[str] = []
+    for label, amount in wins:
+        frames.append(_display_label(label))
+        frames.append(f"${amount:,.2f} returned")
+    if len(wins) > 1:
+        total = sum(amount for _, amount in wins)
+        frames.append(f"Side Bets Total: ${total:,.2f} returned")
+    return frames
+
+
+def _sidebet_preview_text(round_: Round, spot: Spot) -> str:
+    """Pre-settlement preview of Power Poker / Star21 outcomes for whichever
+    of those are actually wagered (Dealer Buster has no preview -- it
+    depends on the dealer's full hand)."""
+    parts = []
+    for key, short in _SIDEBET_SHORT_LABELS.items():
+        wager = spot.side_bet_wagers.get(key, 0.0)
+        if wager <= 0:
+            continue
+        label = round_.side_bet_preview_label(spot, key)
+        if label:
+            parts.append(f"{short}: {_display_label(label)}")
+    return "   ".join(parts)
+
+
+def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> str:
+    """What the side-bet banner shows outside of the settlement flash
+    animation: the final flash frame once settled (so the result stays
+    legible after the animation ends), or a live preview beforehand."""
+    if round_ is None:
         return ""
-    if key == "dealer_buster":
-        return ""  # no preview -- depends on the dealer's full hand
-    label = round_.side_bet_preview_label(spot, key)
-    return _display_label(label) if label else ""
+    if round_.phase == Phase.SETTLED:
+        seq = _sidebet_banner_flash_sequence(round_, spot)
+        return seq[-1] if seq else ""
+    return _sidebet_preview_text(round_, spot)
 
 
 def _draw_result_row(win, y: int, x: int, width: int, text: str) -> None:
@@ -501,6 +547,7 @@ def render(
     bet_row: int = 0,
     bet_col: int = 0,
     bet_edit_buffer: str = "",
+    banner_override: Optional[Dict[int, str]] = None,
 ) -> CellRects:
     stdscr.erase()
     win = stdscr
@@ -545,7 +592,7 @@ def render(
         _safe_addstr(win, y, _center_x(d_status, usable_width, left_margin), d_status, curses.A_BOLD)
     y += 1
 
-    dealer_cards_base_y = y  # row groups stagger downward from here, see _card_slot_offset
+    dealer_cards_base_y = y
     dealer_x = left_margin + max(0, (usable_width - CARD_ROW_WIDTH) // 2)
     if round_:
         draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole)
@@ -561,25 +608,22 @@ def render(
     y += 1
     status_y = y
     y += 1
-    player_cards_base_y = y  # row groups stagger downward from here
+    player_cards_base_y = y
     y += CARD_BLOCK_HEIGHT
     player_overflow_y = y
     y += 1
 
-    # ---- Per-spot wager block: main wager, side-bet header/boxes, results ----
+    # ---- Per-spot wager block: main wager, its payout, side-bet
+    # header/boxes, then the side-bet win/payout banner ----
     wager_box_y = y
-    y += 3 + 1  # main wager box, plus a buffer row before the side-bet titles
+    y += 3
+    payout_row_y = y
+    y += 1
     sidebet_header_y = y
     y += 1
     sidebet_box_y = y
     y += 3
-    payout_row_y = y
-    y += 1
-    pp_result_y = y
-    y += 1
-    s21_result_y = y
-    y += 1
-    buster_result_y = y
+    banner_row_y = y
 
     num_hands = session.rules.num_hands
     active = round_.current_player_hand() if round_ else None
@@ -617,13 +661,15 @@ def render(
         if in_play:
             spot = round_.spots[i]
             _draw_result_row(win, payout_row_y, cx, col_width, _spot_payout_text(round_, i))
-            _draw_result_row(win, pp_result_y, cx, col_width, _sidebet_result_text(round_, spot, "power_poker"))
-            _draw_result_row(win, s21_result_y, cx, col_width, _sidebet_result_text(round_, spot, "star21"))
-            _draw_result_row(win, buster_result_y, cx, col_width, _sidebet_result_text(round_, spot, "dealer_buster"))
+            if banner_override is not None:
+                banner_text = banner_override.get(i, "")
+            else:
+                banner_text = _sidebet_banner_default_text(round_, spot)
+            _draw_result_row(win, banner_row_y, cx, col_width, banner_text)
 
     # ---- Hint / message line (shows the active message in place of the
     # contextual hint when there is one) ----
-    hint_y = buster_result_y + 1
+    hint_y = banner_row_y + 1
     hint = ""
     if round_ is None:
         hint = "Arrows/mouse: move  |  digits: type amount  |  RETURN: confirm / deal"
@@ -716,6 +762,17 @@ def render_stats_screen(stdscr, session: GameSession) -> None:
     _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
 
 
+def render_payouts_screen(stdscr) -> None:
+    lines: List[str] = []
+    for i, (title, rows) in enumerate(PAYOUT_TABLES):
+        if i:
+            lines.append("")
+        lines.append(title)
+        for label, odds in rows:
+            lines.append(f"  {label:<28}{odds}")
+    _render_overlay_lines(stdscr, "cs-blackjack -- Payout Tables", lines)
+
+
 def render_betspread_screen(stdscr) -> None:
     col_w = (16, 14, 14, 14)
     header = f"  {'True Count':<{col_w[0]}}{'1:10 Spread':<{col_w[1]}}{'1:12 Spread':<{col_w[2]}}{'1:15 Spread':<{col_w[3]}}"
@@ -768,15 +825,36 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         curses.napms(700)
         round_.reveal_doubles()
     if round_ is not None and round_.phase == Phase.SETTLED:
+        # Flash each spot's winning side bets (label, then payout, one
+        # after another, ending on the combined total if more than one
+        # side bet hit), 1.5s per frame; shorter sequences hold their last
+        # frame while longer ones keep going. Skipped entirely if nothing
+        # anywhere won, so a round with no side bets in play never pauses.
+        sequences = {i: _sidebet_banner_flash_sequence(round_, spot) for i, spot in enumerate(round_.spots)}
+        max_len = max((len(seq) for seq in sequences.values()), default=0)
+        for step in range(max_len):
+            frames = {i: (seq[min(step, len(seq) - 1)] if seq else "") for i, seq in sequences.items()}
+            render(stdscr, session, round_, "", "", banner_override=frames)
+            curses.napms(1500)
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
-        # No summary text needed here -- the per-spot payout/result rows
+        # No summary text needed here -- the per-spot payout/banner rows
         # already show every hand's outcome.
         return ""
     return None
 
 
-def _dispatch_command(raw: str, session: GameSession, stdscr) -> str:
+def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], stdscr) -> str:
     stripped = raw.strip().lower()
+    if session.pending_hard_reset:
+        session.pending_hard_reset = False
+        if stripped != "confirm":
+            return "Hard reset cancelled."
+        if round_ is not None:
+            return "Finish the current round before hard-resetting."
+        session.stats.reset_lifetime()
+        session.reset_session()
+        _blink_new_shoe(stdscr, session, None)
+        return "Lifetime stats reset. New shoe shuffled in; session stats and bankroll reset."
     if stripped in ("help", "?"):
         render_help_screen(stdscr)
         return ""
@@ -785,6 +863,9 @@ def _dispatch_command(raw: str, session: GameSession, stdscr) -> str:
         return ""
     if stripped == "betspread":
         render_betspread_screen(stdscr)
+        return ""
+    if stripped == "payouts":
+        render_payouts_screen(stdscr)
         return ""
     if stripped == "stats":
         render_stats_screen(stdscr, session)
@@ -1006,7 +1087,7 @@ def _main(stdscr) -> None:
                         commit_bet_cell()
                         continue
                     if buffer.strip():
-                        message = _dispatch_command(buffer, session, stdscr)
+                        message = _dispatch_command(buffer, session, round_, stdscr)
                         buffer = ""
                         if session.quit_requested:
                             break
@@ -1025,7 +1106,7 @@ def _main(stdscr) -> None:
             # Fall through: command-line editing
             if ch in RETURN_KEYS:
                 if buffer.strip():
-                    message = _dispatch_command(buffer, session, stdscr)
+                    message = _dispatch_command(buffer, session, round_, stdscr)
                     buffer = ""
                     if session.quit_requested:
                         break
