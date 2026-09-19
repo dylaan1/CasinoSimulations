@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import curses
 import sys
+import time
 from typing import Dict, List, Optional, Tuple
 
 from . import commands, persist
@@ -446,7 +447,7 @@ def _spot_payout_text(round_: Optional[Round], spot_index: int) -> str:
 
 
 _SIDEBET_KEYS_ORDERED = ("power_poker", "star21", "dealer_buster")
-_SIDEBET_SHORT_LABELS = {"power_poker": "PP", "star21": "S21"}
+_BANNER_FRAME_MS = 1500
 
 
 def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, float]]:
@@ -480,31 +481,44 @@ def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[str]:
     return frames
 
 
-def _sidebet_preview_text(round_: Round, spot: Spot) -> str:
-    """Pre-settlement preview of Power Poker / Star21 outcomes for whichever
-    of those are actually wagered (Dealer Buster has no preview -- it
-    depends on the dealer's full hand)."""
-    parts = []
-    for key, short in _SIDEBET_SHORT_LABELS.items():
+def _sidebet_live_wins(round_: Round, spot: Spot) -> List[str]:
+    """Win labels already confirmed for this spot before settlement.
+    Power Poker and Star21 are knowable as soon as the spot's first two
+    cards and the dealer's up card are dealt, so they can be confirmed on
+    screen right away and held there through the player's whole turn.
+    Dealer Buster has no such preview -- it depends on the dealer's full
+    hand, which isn't drawn until after the player is done -- so it never
+    appears here, only in the settlement flash sequence."""
+    labels = []
+    for key in ("power_poker", "star21"):
         wager = spot.side_bet_wagers.get(key, 0.0)
         if wager <= 0:
             continue
         label = round_.side_bet_preview_label(spot, key)
         if label:
-            parts.append(f"{short}: {_display_label(label)}")
-    return "   ".join(parts)
+            labels.append(_display_label(label))
+    return labels
 
 
 def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> str:
-    """What the side-bet banner shows outside of the settlement flash
-    animation: the final flash frame once settled (so the result stays
-    legible after the animation ends), or a live preview beforehand."""
+    """What the side-bet banner shows outside of a forced (settlement)
+    frame sequence: the final settlement frame once settled (so the
+    result stays legible after the animation ends), or -- while the round
+    is still live -- a wall-clock-driven flash between whichever side
+    bets are already confirmed winners. Deriving the frame from the
+    clock (rather than a counter advanced on each render) means it keeps
+    flickering during genuine idle time too, driven by _main's
+    stdscr.timeout()-based redraws, not just when the player acts."""
     if round_ is None:
         return ""
     if round_.phase == Phase.SETTLED:
         seq = _sidebet_banner_flash_sequence(round_, spot)
         return seq[-1] if seq else ""
-    return _sidebet_preview_text(round_, spot)
+    wins = _sidebet_live_wins(round_, spot)
+    if not wins:
+        return ""
+    frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(wins)
+    return wins[frame]
 
 
 def _draw_result_row(win, y: int, x: int, width: int, text: str) -> None:
@@ -760,7 +774,9 @@ def _render_overlay_lines(stdscr, title: str, lines: List[str]) -> None:
         _safe_addstr(stdscr, y, 2, line, curses.A_BOLD if is_header else curses.A_NORMAL)
     _safe_addstr(stdscr, max_y - 1, 2, "Press any key to return...", curses.A_DIM)
     stdscr.refresh()
-    stdscr.getch()
+    ch = stdscr.getch()
+    while ch == -1:  # stdscr is in timeout() mode for the main loop's idle
+        ch = stdscr.getch()  # redraws; a real "any key" wait needs to skip those
 
 
 def render_help_screen(stdscr) -> None:
@@ -924,6 +940,12 @@ def _hit_test_cell(cell_rects: CellRects, my: int, mx: int) -> Optional[Tuple[in
 def _main(stdscr) -> None:
     curses.curs_set(0)
     stdscr.keypad(True)
+    # Non-blocking-with-timeout getch() so the loop wakes up on its own to
+    # redraw during genuine idle time (e.g. the side-bet win banner's flash
+    # animation), not only when the player presses a key. getch() returns
+    # -1 on timeout; every branch below that only acts on specific keys
+    # already ignores -1, and it's bailed out of immediately besides.
+    stdscr.timeout(200)
     init_colors()
     try:
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
@@ -994,6 +1016,9 @@ def _main(stdscr) -> None:
 
             cell_rects = render(stdscr, session, round_, buffer, message, bet_row, bet_col, bet_edit_buffer)
             ch = stdscr.getch()
+
+            if ch == -1:  # idle timeout tick, no real key -- just loop back and redraw
+                continue
 
             if ch == curses.KEY_RESIZE:
                 continue
