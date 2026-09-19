@@ -37,16 +37,22 @@ SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
 MIN_COL_WIDTH = max(CARD_ROW_WIDTH, SIDEBET_GROUP_W, MAIN_WAGER_BOX_W)
 MIN_COLS = 2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS
 
+# ---- Stats panel ----
+STATS_SESSION_ROWS = 6  # per sub-column (2 sub-columns)
+STATS_LIFETIME_ROWS = 5  # per sub-column (2 sub-columns)
+STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_ROWS)
+
 # ---- Vertical content budget ----
 # Rows, top to bottom: header(3, incl. bankroll) + blank(1) + dealer
 # value/status(2) + dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-ticker
 # row(1) + buffer(2) + player value row(1) + player status(1) + player cards
 # (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + main wager box(3) +
 # main wager payout row(1) + side-bet titles(1) + side-bet boxes(3) +
-# side-bet win/payout banner row(1) + hint/message(1) + blank(1) + input(1).
+# side-bet win/payout banner row(1) + hint/message(1) + blank(1) + input(1) +
+# blank(1) + divider(1) + stats header(1) + stats rows(STATS_MAX_ROWS).
 CONTENT_HEIGHT = (
     3 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 1
-    + 1 + 1 + 1
+    + 1 + 1 + 1 + 1 + 1 + 1 + STATS_MAX_ROWS
 )
 MIN_LINES = CONTENT_HEIGHT + 1
 
@@ -697,6 +703,30 @@ def render(
     # ---- Command input ----
     input_y = hint_y + 2
     _safe_addstr(win, input_y, left_margin, f"> {buffer}")
+
+    # ---- Stats panel: Session (2x6) on the left, Lifetime (2x5) on the
+    # right -- also available full-screen any time via the 'stats' command. ----
+    divider_y = input_y + 2
+    _safe_addstr(win, divider_y, left_margin, "-" * max(usable_width, 0))
+    stats_y = divider_y + 1
+
+    session_rows = session_stats_rows(session)
+    life_rows = lifetime_stats_rows(session)
+    sess_a, sess_b = session_rows[:STATS_SESSION_ROWS], session_rows[STATS_SESSION_ROWS:]
+    life_a, life_b = life_rows[:STATS_LIFETIME_ROWS], life_rows[STATS_LIFETIME_ROWS:]
+
+    stats_col_w = max(1, usable_width // 4)
+    sess_a_x = left_margin
+    sess_b_x = left_margin + stats_col_w
+    life_a_x = left_margin + 2 * stats_col_w
+    life_b_x = left_margin + 3 * stats_col_w
+
+    _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
+    _safe_addstr(win, stats_y, life_a_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
+
+    for col_x_, rows in ((sess_a_x, sess_a), (sess_b_x, sess_b), (life_a_x, life_a), (life_b_x, life_b)):
+        for i, (label, value) in enumerate(rows):
+            _safe_addstr(win, stats_y + 1 + i, col_x_, f"{label:<18}{value}")
 
     win.refresh()
     return cell_rects
