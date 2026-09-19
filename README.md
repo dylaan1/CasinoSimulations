@@ -1,11 +1,13 @@
-# CasinoSimulations™ — cs-blackjack
+# CasinoSimulations™
+
+## cs-blackjack
 
 A full-screen, terminal-based blackjack game built for practicing real-money
 play and card counting. It runs in a `curses` TUI, deals against a
 configurable multi-deck shoe, and tracks a live Hi-Lo running/true count so
 you can rehearse bet-spread strategy against a realistic table.
 
-## CLI-based Settings
+**CLI-based Settings**
 
 - **Full-screen curses UI**: launches maximized and centers the whole table
   (cards, wagers, results, stats) around whatever terminal size it gets.
@@ -52,7 +54,7 @@ you can rehearse bet-spread strategy against a realistic table.
   reference tables — all one keypress away, no need to memorize anything
   up front.
 
-## Requirements
+**Requirements**
 
 - Python 3.9 or later
 - The standard library `curses` module — this ships with Python on Linux
@@ -65,7 +67,7 @@ you can rehearse bet-spread strategy against a realistic table.
 
 No third-party packages are required to run the game itself.
 
-## Download & Install
+**Download & Install**
 
 ```bash
 git clone <repo-url>
@@ -75,7 +77,7 @@ cd CasinoSimulations
 That's it — `cs-blackjack` is pure standard library, so there's nothing to
 `pip install`.
 
-## Launch
+**Launch**
 
 Run it as a module from the repository root:
 
@@ -87,7 +89,7 @@ The game maximizes your terminal window on launch. Your bankroll, lifetime
 and session stats, and table rules are saved to `~/.cs-blackjack_state.json`
 and reloaded automatically the next time you launch.
 
-## Playing
+**Playing**
 
 - **Betting grid**: arrow keys (or a mouse click) move between the wager
   cells for each spot (main wager plus the three side bets); type digits to
@@ -101,7 +103,7 @@ and reloaded automatically the next time you launch.
   every rule toggle, bankroll/table-setup command, side bet configuration,
   and shoe/session controls.
 
-## Data Storage
+**Data Storage**
 
 All game state — bankroll, lifetime and session statistics, and table rules
 — is persisted as JSON to `~/.cs-blackjack_state.json`. Delete that file to
