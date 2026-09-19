@@ -1,6 +1,6 @@
 # CasinoSimulations™
 
-## cs-blackjack
+## Blackjack
 
 A full-screen, terminal-based blackjack game built for practicing real-money
 play and card counting. It runs in a `curses` TUI, deals against a
