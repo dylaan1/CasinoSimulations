@@ -14,7 +14,8 @@ class CommandError(Exception):
 HELP_LINES = [
     "RULES",
     "  das on/off                    Double after split",
-    "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands)",
+    "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands, up to 4)",
+    "  rsa facedown on/off            Deal split-ace cards face down (RSA off only)",
     "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5",
     "  surr late/early/off            Surrender mode",
     "  h17  /  s17                    Dealer hits / stands on soft 17",
@@ -127,6 +128,9 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
     if head == "das":
         rules.das = _parse_bool_on_off(_require(rest, 0, "das on/off"))
         return f"Double after split: {'ON' if rules.das else 'OFF'}"
+
+    if head == "rsa" and rest and rest[0] == "facedown":
+        return _rsa_facedown_command(rest[1:], session)
 
     if head == "rsa":
         return _rsa_command(rest, session)
@@ -253,18 +257,36 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
 def _rsa_command(rest: List[str], session: "GameSession") -> str:
     rules = session.rules
     i = 0
+    turned_on = False
     if i < len(rest) and rest[i] in ("on", "off"):
         rules.rsa = rest[i] == "on"
+        turned_on = rules.rsa
         i += 1
     if i < len(rest) and rest[i] == "maxsplit":
         n = _parse_int(_require(rest, i + 1, "rsa on/off maxsplit N"), "maxsplit")
-        if not (2 <= n <= 8):
-            raise CommandError("maxsplit must be between 2 and 8")
+        if not (2 <= n <= 4):
+            raise CommandError("maxsplit must be between 2 and 4")
         rules.rsa_max_hands = n
         i += 2
     if i == 0:
         raise CommandError("Usage: rsa on/off [maxsplit N]")
-    return f"Resplit aces: {'ON' if rules.rsa else 'OFF'} (max {rules.rsa_max_hands} hands)"
+    note = ""
+    if turned_on and rules.rsa_facedown:
+        # Facedown split-ace cards only make sense with RSA off (a single,
+        # final split) -- turning RSA back on retires it rather than
+        # leaving an unreachable flag set.
+        rules.rsa_facedown = False
+        note = " (RSA facedown turned off)"
+    return f"Resplit aces: {'ON' if rules.rsa else 'OFF'} (max {rules.rsa_max_hands} hands){note}"
+
+
+def _rsa_facedown_command(rest: List[str], session: "GameSession") -> str:
+    rules = session.rules
+    on = _parse_bool_on_off(_require(rest, 0, "rsa facedown on/off"))
+    if on and rules.rsa:
+        raise CommandError("RSA facedown only works when RSA is toggled off.")
+    rules.rsa_facedown = on
+    return f"Split-ace cards dealt face down: {'ON' if rules.rsa_facedown else 'OFF'}"
 
 
 def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:

@@ -24,6 +24,7 @@ class Stats:
     surrenders_lifetime: int = 0
     dealer_busts_8plus: int = 0  # dealer busts on an 8th (or later) card
     blazing_sevens: int = 0  # Star 21 hits on Suited 7-7-7 Diamonds
+    royal_flushes: int = 0  # Power Poker hits on a suited A-K-Q (Royal Flush) on the deal
 
     lifetime_main_wagered: float = 0.0  # sum of main-hand bets settled, for EV%
     lifetime_main_pl: float = 0.0
@@ -85,6 +86,9 @@ class Stats:
     def record_blazing_seven(self) -> None:
         self.blazing_sevens += 1
 
+    def record_royal_flush(self) -> None:
+        self.royal_flushes += 1
+
     def reset_session(self) -> None:
         """Zero every session-scoped counter; lifetime counters are untouched."""
         self.hands_this_session = 0
@@ -108,6 +112,7 @@ class Stats:
         self.surrenders_lifetime = 0
         self.dealer_busts_8plus = 0
         self.blazing_sevens = 0
+        self.royal_flushes = 0
         self.lifetime_main_wagered = 0.0
         self.lifetime_main_pl = 0.0
         self.lifetime_sidebet_pl = 0.0
@@ -126,6 +131,7 @@ class Stats:
             "surrenders_lifetime": self.surrenders_lifetime,
             "dealer_busts_8plus": self.dealer_busts_8plus,
             "blazing_sevens": self.blazing_sevens,
+            "royal_flushes": self.royal_flushes,
             "lifetime_main_wagered": self.lifetime_main_wagered,
             "lifetime_main_pl": self.lifetime_main_pl,
             "lifetime_sidebet_pl": self.lifetime_sidebet_pl,
@@ -141,6 +147,7 @@ class Stats:
         stats.surrenders_lifetime = int(data.get("surrenders_lifetime", 0))
         stats.dealer_busts_8plus = int(data.get("dealer_busts_8plus", 0))
         stats.blazing_sevens = int(data.get("blazing_sevens", 0))
+        stats.royal_flushes = int(data.get("royal_flushes", 0))
         stats.lifetime_main_wagered = float(data.get("lifetime_main_wagered", 0.0))
         stats.lifetime_main_pl = float(data.get("lifetime_main_pl", 0.0))
         stats.lifetime_sidebet_pl = float(data.get("lifetime_sidebet_pl", 0.0))
