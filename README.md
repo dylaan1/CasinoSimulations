@@ -1,11 +1,13 @@
-# CasinoSimulations™ — cs-blackjack
+# CasinoSimulations™
+
+## Blackjack
 
 A full-screen, terminal-based blackjack game built for practicing real-money
 play and card counting. It runs in a `curses` TUI, deals against a
 configurable multi-deck shoe, and tracks a live Hi-Lo running/true count so
 you can rehearse bet-spread strategy against a realistic table.
 
-## CLI-based Settings
+**CLI-based Settings**
 
 - **Full-screen curses UI**: launches maximized and centers the whole table
   (cards, wagers, results, stats) around whatever terminal size it gets.
@@ -20,7 +22,7 @@ you can rehearse bet-spread strategy against a realistic table.
   splits (up to the configured max, including resplit aces) tracked
   independently per hand.
 - **Three side bets**, each with its own paytable and settlement line:
-  - **Power Poker** — your first two cards plus the dealer's up-card,
+  - **PowerPoker** — your first two cards plus the dealer's up-card,
     scored as a 3-card poker hand (trips, straight, flush, straight flush,
     royal flush).
   - **Star21** — the same three cards summed like a 21 total, with bonus
@@ -52,20 +54,18 @@ you can rehearse bet-spread strategy against a realistic table.
   reference tables — all one keypress away, no need to memorize anything
   up front.
 
-## Requirements
+**Requirements**
 
 - Python 3.9 or later
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **402x48** — the layout uses a
-  fixed side margin and reserves room for a fully split 12-hand table, so it
-  needs a genuinely wide terminal; it will refuse to draw the table and show
-  a "too small" message below that size
+  escape sequence on launch) and is at least **150x46** — it will refuse
+  to draw the table and show a "too small" message below that size
 
 No third-party packages are required to run the game itself.
 
-## Download & Install
+**Download & Install**
 
 ```bash
 git clone <repo-url>
@@ -75,7 +75,7 @@ cd CasinoSimulations
 That's it — `cs-blackjack` is pure standard library, so there's nothing to
 `pip install`.
 
-## Launch
+**Launch**
 
 Run it as a module from the repository root:
 
@@ -87,7 +87,7 @@ The game maximizes your terminal window on launch. Your bankroll, lifetime
 and session stats, and table rules are saved to `~/.cs-blackjack_state.json`
 and reloaded automatically the next time you launch.
 
-## Playing
+**Playing**
 
 - **Betting grid**: arrow keys (or a mouse click) move between the wager
   cells for each spot (main wager plus the three side bets); type digits to
@@ -101,7 +101,7 @@ and reloaded automatically the next time you launch.
   every rule toggle, bankroll/table-setup command, side bet configuration,
   and shoe/session controls.
 
-## Data Storage
+**Data Storage**
 
 All game state — bankroll, lifetime and session statistics, and table rules
 — is persisted as JSON to `~/.cs-blackjack_state.json`. Delete that file to
