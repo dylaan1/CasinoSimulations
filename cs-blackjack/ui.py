@@ -10,27 +10,31 @@ from .engine import OUTCOME_LABELS, SIDE_BET_LABELS, GameSession, Phase, Round, 
 from .hand import Hand
 
 # ---- Card art / hand-stacking geometry ----
-# Cards within a hand are drawn side by side with no overlap, up to 4 at a
-# time. A 5th+ card restacks in the same 4 x-slots, 2 rows higher than the
-# group below it -- CARD_STACK_HEADROOM is chosen so the upper card's own
-# bottom row lands exactly on the lower card's middle (suit) row, which
-# keeps the lower card's bottom-corner rank tag visible beneath it instead
-# of burying the whole card.
+# Only one hand per spot is ever shown at full size (see the "active hand"
+# logic below), so a hand can afford real 7x5 cards fanned with some
+# horizontal overlap -- up to 4 cards per row. A 5th+ card starts a new row
+# stacked on top of (drawn after, so it visually covers) the row below it,
+# staggered a little down and to the right for a diagonal, dealt-at-a-table
+# look; up to 3 rows (12 cards) are shown this way. Cards beyond 12 (which a
+# player will in practice basically never reach without busting) fall back
+# to compact colored rank+suit chips on their own line instead of a 4th
+# stacked row.
 CARD_H = 5
 CARD_W = 7
-CARDS_PER_GROUP = 4
-CARD_STACK_HEADROOM = 2
-CARD_BLOCK_HEIGHT = CARD_H + CARD_STACK_HEADROOM  # reserved rows for an 8-card hand
+FAN_OFFSET = 3  # horizontal step between cards within the same row
+CARDS_PER_ROW = 4
+MAX_CARD_ROWS = 3  # 3 rows x 4 cards = 12 cards shown as real cards
+GROUP_DX = 0  # extra rightward creep per stacked row (0 keeps rows column-aligned, which
+# reads far more cleanly than a diagonal creep once combined with the within-row fan --
+# two similar-magnitude diagonal offsets at once just crisscross and get hard to read)
+GROUP_DY = 1  # rows each subsequent stacked row is staggered downward
+MAX_CARDS_IN_GRID = CARDS_PER_ROW * MAX_CARD_ROWS  # 12
+CARD_ROW_WIDTH = CARD_W + FAN_OFFSET * (CARDS_PER_ROW - 1) + GROUP_DX * (MAX_CARD_ROWS - 1)
+CARD_BLOCK_HEIGHT = CARD_H + GROUP_DY * (MAX_CARD_ROWS - 1)  # reserved rows for a 12-card hand
 
 # ---- Table geometry ----
-MARGIN_COLS = 15  # ~1.25in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
-SIDE_GAP = 3  # gap between adjacent split-hand slots within one spot
-SUB_HAND_SLOT = CARD_W * CARDS_PER_GROUP + SIDE_GAP  # room for up to 4 side-by-side cards, plus a gap
-MAX_HANDS_PER_SPOT = 4  # reserve room for 3 splits (4 hands) per spot, 12 total
-SPOT_WIDTH = SUB_HAND_SLOT * MAX_HANDS_PER_SPOT
+MARGIN_COLS = 12  # ~1.0in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
 NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, regardless of `hands`
-MIN_TABLE_WIDTH = SPOT_WIDTH * NUM_SPOT_COLUMNS
-MIN_COLS = 2 * MARGIN_COLS + MIN_TABLE_WIDTH
 
 # ---- Wager cell boxes ----
 MAIN_WAGER_BOX_W = 12
@@ -38,21 +42,19 @@ SIDEBET_BOX_W = 9
 SIDEBET_BOX_GAP = 2
 SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
 
-# ---- Stats panel ----
-STATS_LIFETIME_ROWS = 5  # per sub-column (2 sub-columns)
-STATS_SESSION_ROWS = 6  # per sub-column (2 sub-columns)
-STATS_MAX_ROWS = max(STATS_LIFETIME_ROWS, STATS_SESSION_ROWS)
+MIN_COL_WIDTH = max(CARD_ROW_WIDTH, SIDEBET_GROUP_W, MAIN_WAGER_BOX_W)
+MIN_COLS = 2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS
 
 # ---- Vertical content budget ----
 # Rows, top to bottom: header(2) + blank(1) + dealer value/status(2) +
-# dealer cards(CARD_BLOCK_HEIGHT) + double buffer(2) + player cards
-# (CARD_BLOCK_HEIGHT) + player value/status(2) + main wager box(3) +
+# dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-chip row(1) +
+# buffer(2) + player value row(1) + player status(1) + player cards
+# (CARD_BLOCK_HEIGHT) + player overflow-chip row(1) + main wager box(3) +
 # buffer(1) + side-bet titles(1) + side-bet boxes(3) + 4 result rows(4) +
-# hint/message(1) + blank(1) + input(1) + blank(1) + divider(1) +
-# stats header(1) + stats rows(STATS_MAX_ROWS).
+# hint/message(1) + blank(1) + input(1).
 CONTENT_HEIGHT = (
-    2 + 1 + 2 + CARD_BLOCK_HEIGHT + 2 + CARD_BLOCK_HEIGHT + 2 + 3 + 1 + 1 + 3 + 4
-    + 1 + 1 + 1 + 1 + 1 + 1 + STATS_MAX_ROWS
+    2 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 4
+    + 1 + 1 + 1
 )
 MIN_LINES = CONTENT_HEIGHT + 1
 
@@ -135,9 +137,9 @@ def _emph(text: str) -> str:
 
 
 def _emph_compact(text: str) -> str:
-    """Tighter emphasis for split sub-hands, where slots are only
-    SUB_HAND_SLOT wide -- the full '*** N ***' treatment has zero gap left
-    over at that width and runs straight into the next hand's value."""
+    """Single-asterisk emphasis for a collapsed (already-completed) split
+    hand's value, and for the live value of a spot that has any splits --
+    distinguishes them from the '*** N ***' treatment an unsplit hand gets."""
     return f"*{text}*"
 
 
@@ -173,34 +175,63 @@ def draw_card(win, y: int, x: int, card: Optional[Card], face_down: bool = False
         _safe_addstr(win, y + i, x, line, color)
 
 
-def _card_slot_offset(index: int) -> Tuple[int, int]:
-    """(dx, dy) for the index'th card in a hand: cards 0-3 sit side by side
-    with no overlap; every subsequent group of 4 restacks in the same 4
-    x-slots, CARD_STACK_HEADROOM rows higher than the group below it."""
-    group, slot = divmod(index, CARDS_PER_GROUP)
-    return slot * CARD_W, -CARD_STACK_HEADROOM * group
-
-
-def _hand_width(hand: Hand) -> int:
-    cols = min(len(hand.cards), CARDS_PER_GROUP) or 1
-    return cols * CARD_W
+def _card_slot_offset(index: int) -> Optional[Tuple[int, int]]:
+    """(dx, dy) for the index'th card in a hand's fan/stack, or None once
+    the 12-card grid is full (those cards render as overflow chips
+    instead). Cards 0-3 fan out with a horizontal overlap; every
+    subsequent row of 4 is drawn after (so it visually sits on top of) the
+    row below it, staggered GROUP_DY rows down and GROUP_DX columns right."""
+    if index >= MAX_CARDS_IN_GRID:
+        return None
+    row, slot = divmod(index, CARDS_PER_ROW)
+    return slot * FAN_OFFSET + row * GROUP_DX, row * GROUP_DY
 
 
 def draw_hand(win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False) -> None:
     last_index = len(hand.cards) - 1
     for i, card in enumerate(hand.cards):
-        dx, dy = _card_slot_offset(i)
+        offset = _card_slot_offset(i)
+        if offset is None:
+            continue  # drawn separately as an overflow chip -- see _draw_overflow_chips
+        dx, dy = offset
         face_down = (hide_hole and i == 1) or (hide_last and i == last_index)
         draw_card(win, base_y + dy, x + dx, card, face_down=face_down)
 
+    # If the frontmost row (the one on top in z-order) has fewer than
+    # CARDS_PER_ROW cards, blank out the rest of that row's width so an
+    # older, covered row's cards don't peek through into what should read
+    # as empty space to the right of the last real card.
+    grid_n = min(len(hand.cards), MAX_CARDS_IN_GRID)
+    if grid_n > CARDS_PER_ROW:
+        last_row, filled = divmod(grid_n - 1, CARDS_PER_ROW)
+        filled += 1
+        if filled < CARDS_PER_ROW:
+            dy = last_row * GROUP_DY
+            last_card_dx = (filled - 1) * FAN_OFFSET + last_row * GROUP_DX
+            blank_x = x + last_card_dx + CARD_W
+            blank_w = CARD_ROW_WIDTH - (last_card_dx + CARD_W)
+            if blank_w > 0:
+                for r in range(CARD_H):
+                    _safe_addstr(win, base_y + dy + r, blank_x, " " * blank_w)
 
-def _spot_group_x(col_x: int, col_width: int, num_sub_hands: int) -> int:
-    """Left edge for a spot's block of sub-hand slots, centered within its
-    column segment so a single (unsplit) hand's cards/value/status line up
-    with its wager box below, rather than sitting flush against the
-    column's left edge."""
-    content_width = num_sub_hands * SUB_HAND_SLOT
-    return col_x + max(0, (col_width - content_width) // 2)
+
+def _draw_overflow_chips(win, y: int, x: int, width: int, hand: Hand, hide_last: bool = False) -> None:
+    """Cards past the 12-card grid (all but statistically impossible in
+    real play) as compact colored rank+suit chips on their own line."""
+    if len(hand.cards) <= MAX_CARDS_IN_GRID:
+        return
+    last_index = len(hand.cards) - 1
+    cx = x
+    for i in range(MAX_CARDS_IN_GRID, len(hand.cards)):
+        card = hand.cards[i]
+        if hide_last and i == last_index:
+            tag = "??"
+        else:
+            tag = f"{card.short_rank}{card.glyph}"
+        if cx + len(tag) > x + width:
+            break
+        _safe_addstr(win, y, cx, tag, _card_color(card))
+        cx += len(tag) + 1
 
 
 def hand_value_label(hand: Hand, hide_hole: bool = False, resolved: bool = False) -> str:
@@ -422,6 +453,45 @@ def _draw_result_row(win, y: int, x: int, width: int, text: str) -> None:
     _safe_addstr(win, y, _center_x(text, width, x), text, curses.A_BOLD)
 
 
+def _active_hand_index(spot: Spot, round_: Round) -> int:
+    """Index of the one hand in this spot whose cards should currently be
+    on screen: the first not-yet-finished hand (played to completion in
+    order, one at a time, same as the engine's own turn order), or the
+    last hand once every hand in the spot is done -- its cards then stay
+    up through the dealer's turn and settlement."""
+    for i, hand in enumerate(spot.hands):
+        if round_.legal_actions(spot, hand):
+            return i
+    return len(spot.hands) - 1
+
+
+def _draw_spot_value_row(
+    win, y: int, col_x: int, col_width: int, spot: Spot, round_: Round, active: Optional[Tuple[Spot, Hand]]
+) -> Hand:
+    """Draws, left to right: a single-asterisk collapsed-value chip for
+    each already-completed hand in this spot, then the '*** N ***' (or, if
+    any splits happened, also single-asterisk) live value for the one hand
+    whose cards are currently shown. Returns that hand."""
+    active_index = _active_hand_index(spot, round_)
+    parts: List[Tuple[str, int]] = []
+    for i in range(active_index):
+        text = _emph_compact(hand_value_label(spot.hands[i], resolved=True))
+        parts.append((text, curses.A_BOLD))
+
+    hand = spot.hands[active_index]
+    emph = _emph if len(spot.hands) == 1 else _emph_compact
+    is_active = active is not None and active[1] is hand
+    value_text = emph(hand_value_label(hand, resolved=hand.is_resolved))
+    parts.append((value_text, curses.A_REVERSE if is_active else curses.A_BOLD))
+
+    total_width = sum(len(t) for t, _ in parts) + 2 * (len(parts) - 1)
+    x = col_x + max(0, (col_width - total_width) // 2)
+    for text, attr in parts:
+        _safe_addstr(win, y, x, text, attr)
+        x += len(text) + 2
+    return hand
+
+
 def render(
     stdscr,
     session: GameSession,
@@ -475,21 +545,25 @@ def render(
         _safe_addstr(win, y, _center_x(d_status, usable_width, left_margin), d_status, curses.A_BOLD)
     y += 1
 
-    dealer_cards_top_y = y
-    dealer_cards_base_y = dealer_cards_top_y + CARD_STACK_HEADROOM
+    dealer_cards_base_y = y  # row groups stagger downward from here, see _card_slot_offset
+    dealer_x = left_margin + max(0, (usable_width - CARD_ROW_WIDTH) // 2)
     if round_:
-        dw = _hand_width(dealer_hand)
-        dealer_x = max(left_margin, left_margin + (usable_width - dw) // 2)
         draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole)
-    y += CARD_BLOCK_HEIGHT + 2  # dealer cards block, plus a two-row buffer before the player's cards
-
-    # ---- PLAYER: cards, value line, status line ----
-    player_cards_top_y = y
-    player_cards_base_y = player_cards_top_y + CARD_STACK_HEADROOM
     y += CARD_BLOCK_HEIGHT
+    dealer_overflow_y = y
+    if round_ and not hide_hole:
+        _draw_overflow_chips(win, dealer_overflow_y, dealer_x, CARD_ROW_WIDTH, dealer_hand)
+    y += 1 + 2  # dealer overflow-chip row, plus a two-row buffer before the player's area
+
+    # ---- PLAYER: value line (collapsed split-hand chips + live value),
+    # status line, then the currently-shown hand's cards ----
     value_y = y
     y += 1
     status_y = y
+    y += 1
+    player_cards_base_y = y  # row groups stagger downward from here
+    y += CARD_BLOCK_HEIGHT
+    player_overflow_y = y
     y += 1
 
     # ---- Per-spot wager block: main wager, side-bet header/boxes, results ----
@@ -516,20 +590,15 @@ def render(
 
         if in_play:
             spot = round_.spots[i]
-            group_x = _spot_group_x(cx, col_width, len(spot.hands))
-            for j, hand in enumerate(spot.hands):
-                sub_x = group_x + j * SUB_HAND_SLOT
-                is_active = active is not None and active[1] is hand
-                value_attr = curses.A_REVERSE if is_active else curses.A_BOLD
+            shown_hand = _draw_spot_value_row(win, value_y, cx, col_width, spot, round_, active)
 
-                draw_hand(win, player_cards_base_y, sub_x, hand, hide_last=hand.double_hidden)
-                emph = _emph if len(spot.hands) == 1 else _emph_compact
-                value_text = emph(hand_value_label(hand, resolved=hand.is_resolved))
-                _safe_addstr(win, value_y, _center_x(value_text, SUB_HAND_SLOT, sub_x), value_text, value_attr)
+            status = hand_status_text(shown_hand, spot, round_)
+            is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
+            _safe_addstr(win, status_y, _center_x(status, col_width, cx), status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
 
-                status = hand_status_text(hand, spot, round_)
-                is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
-                _safe_addstr(win, status_y, _center_x(status, SUB_HAND_SLOT, sub_x), status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
+            hand_x = cx + max(0, (col_width - CARD_ROW_WIDTH) // 2)
+            draw_hand(win, player_cards_base_y, hand_x, shown_hand, hide_last=shown_hand.double_hidden)
+            _draw_overflow_chips(win, player_overflow_y, hand_x, CARD_ROW_WIDTH, shown_hand, hide_last=shown_hand.double_hidden)
 
         # Wager grid: always drawn for all three spots (regardless of how many
         # hands are actually in play this round) so wagers stay visible,
@@ -579,29 +648,6 @@ def render(
     # ---- Command input ----
     input_y = hint_y + 2
     _safe_addstr(win, input_y, left_margin, f"> {buffer}")
-
-    divider_y = input_y + 2
-    _safe_addstr(win, divider_y, left_margin, "-" * max(usable_width, 0))
-
-    # ---- Stats panel: Lifetime (2x5) and Session (2x6), side by side ----
-    stats_y = divider_y + 1
-    life_rows = lifetime_stats_rows(session)
-    session_rows = session_stats_rows(session)
-    life_a, life_b = life_rows[:5], life_rows[5:]
-    sess_a, sess_b = session_rows[:6], session_rows[6:]
-
-    stats_col_w = max(1, usable_width // 4)
-    life_a_x = left_margin
-    life_b_x = left_margin + stats_col_w
-    sess_a_x = left_margin + 2 * stats_col_w
-    sess_b_x = left_margin + 3 * stats_col_w
-
-    _safe_addstr(win, stats_y, life_a_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
-    _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
-
-    for col_x_, rows in ((life_a_x, life_a), (life_b_x, life_b), (sess_a_x, sess_a), (sess_b_x, sess_b)):
-        for i, (label, value) in enumerate(rows):
-            _safe_addstr(win, stats_y + 1 + i, col_x_, f"{label:<18}{value}")
 
     win.refresh()
     return cell_rects
@@ -657,6 +703,17 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         state = f"ON  (min ${rule.min_bet:,.0f}, max ${rule.max_bet:,.0f})" if rule.enabled else "off"
         lines.append(f"  {label:<16} {state}")
     _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
+
+
+def render_stats_screen(stdscr, session: GameSession) -> None:
+    lines: List[str] = ["LIFETIME STATS"]
+    for label, value in lifetime_stats_rows(session):
+        lines.append(f"  {label:<18}{value}")
+    lines.append("")
+    lines.append("SESSION STATS")
+    for label, value in session_stats_rows(session):
+        lines.append(f"  {label:<18}{value}")
+    _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
 
 
 def render_betspread_screen(stdscr) -> None:
@@ -728,6 +785,9 @@ def _dispatch_command(raw: str, session: GameSession, stdscr) -> str:
         return ""
     if stripped == "betspread":
         render_betspread_screen(stdscr)
+        return ""
+    if stripped == "stats":
+        render_stats_screen(stdscr, session)
         return ""
     return commands.handle_command(raw, session)
 

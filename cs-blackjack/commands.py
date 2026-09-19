@@ -57,6 +57,7 @@ HELP_LINES = [
     "MISC",
     "  help | ?                       Show this screen",
     "  gamerules                      Show the full table-rules screen",
+    "  stats                          Show the lifetime/session stats screen",
     "  quit | exit                    Quit cs-blackjack",
 ]
 
