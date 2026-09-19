@@ -30,7 +30,7 @@ NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, reg
 
 # ---- Wager cell boxes ----
 MAIN_WAGER_BOX_W = 12
-SIDEBET_BOX_W = 9
+SIDEBET_BOX_W = 12  # fits "PowerPoker" (10 chars), the longest side-bet title, exactly
 SIDEBET_BOX_GAP = 2
 SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
 
@@ -68,7 +68,7 @@ ACTION_HINTS = [
 # Betting-grid rows: index 0 is the main wager, 1-3 are the side bets, in the
 # same left-to-right order they're drawn on screen (PP, S21, BUST).
 ROW_KEYS = [None, "power_poker", "star21", "dealer_buster"]
-SIDEBET_LABELS = ["PP", "S21", "BUST"]
+SIDEBET_LABELS = ["PowerPoker", "Star21", "Buster"]
 WAGER_MAX_LEN = 8
 SIDEBET_MAX_LEN = 5
 
@@ -158,6 +158,14 @@ def _safe_addstr(win, y: int, x: int, text: str, attr: int = 0) -> None:
 
 def _center_x(text: str, width: int, origin: int = 0) -> int:
     return origin + max(0, (width - len(text)) // 2)
+
+
+def _center_x_right_bias(text: str, width: int, origin: int = 0) -> int:
+    """Like _center_x, but when the text can't sit perfectly centered (an
+    odd leftover gap), the extra column goes on the left, staggering the
+    text one column right instead of left. Used for wager cell values."""
+    pad = max(0, width - len(text))
+    return origin + (pad + 1) // 2
 
 
 def _emph(text: str) -> str:
@@ -382,7 +390,7 @@ def _draw_wager_cell(
         text = f"{session.wagers[col]:,.0f}"
     _draw_box(win, box_y, box_x, MAIN_WAGER_BOX_W, dim=dim)
     attr = curses.A_REVERSE if is_focused else (curses.A_DIM if dim else 0)
-    _safe_addstr(win, box_y + 1, _center_x(text, MAIN_WAGER_BOX_W - 2, box_x + 1), text, attr)
+    _safe_addstr(win, box_y + 1, _center_x_right_bias(text, MAIN_WAGER_BOX_W - 2, box_x + 1), text, attr)
 
 
 def _draw_sidebet_headers(win, y: int, x: int) -> None:
@@ -415,7 +423,7 @@ def _draw_sidebet_amounts(
             # reachable by the row scroller (or a mouse click) --
             # unselectable, not just styled.
             _draw_box(win, box_y, sub_x, SIDEBET_BOX_W, dim=True)
-            _safe_addstr(win, box_y + 1, _center_x("Off", SIDEBET_BOX_W - 2, sub_x + 1), "Off", curses.A_DIM)
+            _safe_addstr(win, box_y + 1, _center_x_right_bias("Off", SIDEBET_BOX_W - 2, sub_x + 1), "Off", curses.A_DIM)
             continue
         if is_focused and bet_edit_buffer:
             text = bet_edit_buffer
@@ -425,7 +433,7 @@ def _draw_sidebet_amounts(
             text = f"{session.side_bet_wagers[col].get(key, 0.0):,.0f}"
         _draw_box(win, box_y, sub_x, SIDEBET_BOX_W, dim=dim)
         attr = curses.A_REVERSE if is_focused else (curses.A_DIM if dim else 0)
-        _safe_addstr(win, box_y + 1, _center_x(text, SIDEBET_BOX_W - 2, sub_x + 1), text, attr)
+        _safe_addstr(win, box_y + 1, _center_x_right_bias(text, SIDEBET_BOX_W - 2, sub_x + 1), text, attr)
         rects[(row, col)] = (box_y, sub_x, 3, SIDEBET_BOX_W)
     return rects
 
