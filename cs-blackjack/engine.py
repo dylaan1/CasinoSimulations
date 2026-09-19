@@ -611,8 +611,8 @@ class Round:
     def _settle_side_bets(self) -> List[SideBetResult]:
         results: List[SideBetResult] = []
         evaluators = {
-            "power_poker": ("Power Poker", evaluate_power_poker),
-            "star21": ("Star 21", evaluate_star21),
+            "power_poker": (SIDE_BET_LABELS["power_poker"], evaluate_power_poker),
+            "star21": (SIDE_BET_LABELS["star21"], evaluate_star21),
         }
         for spot in self.spots:
             player_cards = spot.side_bet_snapshot
@@ -643,7 +643,7 @@ class Round:
                 if win:
                     self.session.adjust_bankroll(win)
                 self.session.stats.record_side_bet(buster_wager, win)
-                results.append(SideBetResult(spot.index, "Dealer Buster", buster_wager, label, multiplier, win))
+                results.append(SideBetResult(spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win))
         return results
 
     def _settle_round(self) -> None:
