@@ -19,7 +19,7 @@ OUTCOME_LABELS = {
 }
 
 SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
-SIDE_BET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
+SIDE_BET_LABELS = {"power_poker": "PowerPoker", "star21": "Star21", "dealer_buster": "Dealer Buster"}
 
 # American-style peek: the dealer checks their hole card for blackjack whenever
 # the up card is an Ace or any ten-value card. Insurance/even money are only
