@@ -36,28 +36,77 @@ SIDEBET_BOX_GAP = 2
 SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
 
 MIN_COL_WIDTH = max(CARD_ROW_WIDTH, SIDEBET_GROUP_W, MAIN_WAGER_BOX_W)
-MIN_COLS = 2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS
 
 # ---- Stats panel ----
 STATS_SESSION_ROWS = 6  # per sub-column (2 sub-columns)
 STATS_LIFETIME_ROWS = 6  # per sub-column (2 sub-columns)
 STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_ROWS)
-STATS_COUNTING_ROWS = 3  # Cards Left(Dealt) / Running / True, in the leftmost quarter
+
+# Side-bet paytables, mirroring the odds in sidebets.py's evaluators --
+# shown inline in the stats bar (see PAYOUT_COL_W etc. below), titled to
+# match the compact SIDEBET_LABELS used on the wager cells above.
+PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
+    ("PowerPoker", [
+        ("Royal Flush", "50:1"),
+        ("Straight Flush", "30:1"),
+        ("Flush", "15:1"),
+        ("Straight", "9:1"),
+        ("Trips", "3:1"),
+    ]),
+    ("Star21", [
+        ("Suited 7-7-7♦", "5000:1"),
+        ("Suited 7-7-7", "500:1"),
+        ("Suited 6-7-8", "100:1"),
+        ("Suited 21", "40:1"),
+        ("Unsuited 7-7-7", "20:1"),
+        ("Unsuited 6-7-8", "15:1"),
+        ("Unsuited 21", "5:1"),
+        ("Any 20", "3:1"),
+        ("Any 19", "2:1"),
+    ]),
+    ("Buster", [
+        ("3 card bust", "2:1"),
+        ("4 card bust", "3:1"),
+        ("5 card bust", "12:1"),
+        ("6 card bust", "50:1"),
+        ("7 card bust", "100:1"),
+        ("8+ card bust", "250:1"),
+    ]),
+]
+PAYOUT_COL_W = 23  # label + right-aligned odds, per mini table
+PAYOUT_GAP = 2
+PAYOUT_MAX_ROWS = max(len(rows) for _, rows in PAYOUT_TABLES)  # 9 (Star21)
+STATS_BLOCK_ROWS = max(STATS_MAX_ROWS, PAYOUT_MAX_ROWS)  # shared row budget for the two side-by-side blocks
+
+# The payout tables + session/lifetime stats row needs its own width floor,
+# independent of the per-spot-column floor above -- it's what actually goes
+# illegible first on a narrow terminal (labels/values get hard-clipped, not
+# overlapped, but truncate into gibberish well before the card/wager rows
+# would ever collide).
+STATS_MIN_COL_W = 25  # per stats sub-column (4 sub-columns: session x2, lifetime x2)
+STATS_ROW_MIN_WIDTH = (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4
+MIN_COLS = max(
+    2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS,
+    2 * MARGIN_COLS + STATS_ROW_MIN_WIDTH,
+)
 
 # ---- Vertical content budget ----
-# Rows, top to bottom: title(1) + rules-summary/bankroll banner(1) +
-# table-status banner(1) + blank(1) + dealer status(1) + dealer value(1) +
-# dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-ticker row(1) +
-# buffer(2) + player value row(1) + player status(1) + player cards
-# (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + main wager box(3) +
-# main wager payout row(1) + side-bet titles(1) + side-bet boxes(3) +
-# side-bet win/payout banner row(1) + hint/message(1) + blank(1) + input(1) +
-# blank(1) + divider(1) + stats header(1) + stats rows(STATS_MAX_ROWS).
+# Rows, top to bottom: title(1) + rules-summary/card-count/bankroll
+# banner(1) + table-status/running-true banner(1) + divider(1) + dealer
+# status(1) + dealer value(1) + dealer cards(CARD_BLOCK_HEIGHT) +
+# buffer(1) + chips row(1) + player status(1) + player cards
+# (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + active value(1) +
+# buffer(1) + main wager box(3) + main wager payout row(1) + side-bet
+# titles(1) + side-bet boxes(3) + side-bet win/payout banner row(1) +
+# hint/message(1) + blank(1) + input(1) + blank(1) + divider(1) +
+# stats/payout header(1) + stats/payout rows(STATS_BLOCK_ROWS).
 CONTENT_HEIGHT = (
-    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 1
-    + 1 + 1 + 1 + 1 + 1 + 1 + STATS_MAX_ROWS
+    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + 3 + 1 + 1 + 3 + 1
+    + 1 + 1 + 1 + 1 + 1 + 1 + STATS_BLOCK_ROWS
 )
-MIN_LINES = CONTENT_HEIGHT + 1
+# +2 reserves the top/bottom rows of the border frame around the whole
+# window (see _draw_window_border) -- content is inset 1 row inside it.
+MIN_LINES = CONTENT_HEIGHT + 2
 
 RETURN_KEYS = {10, 13, curses.KEY_ENTER}
 ACTION_HINTS = [
@@ -111,36 +160,6 @@ BET_SPREAD_TABLES: List[Tuple[str, List[Tuple[str, str, str, str]]]] = [
     ]),
 ]
 
-# Side-bet paytables, mirroring the odds in sidebets.py's evaluators.
-PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
-    ("Power Poker", [
-        ("Royal Flush", "50:1"),
-        ("Straight Flush", "30:1"),
-        ("Flush", "15:1"),
-        ("Straight", "9:1"),
-        ("Trips", "3:1"),
-    ]),
-    ("Star 21", [
-        ("Suited 7-7-7♦", "5000:1"),
-        ("Suited 7-7-7", "500:1"),
-        ("Suited 6-7-8", "100:1"),
-        ("Suited 21", "40:1"),
-        ("Unsuited 7-7-7", "20:1"),
-        ("Unsuited 6-7-8", "15:1"),
-        ("Unsuited 21", "5:1"),
-        ("Any 20", "3:1"),
-        ("Any 19", "2:1"),
-    ]),
-    ("Dealer Buster", [
-        ("3 card bust", "2:1"),
-        ("4 card bust", "3:1"),
-        ("5 card bust", "12:1"),
-        ("6 card bust", "50:1"),
-        ("7 card bust", "100:1"),
-        ("8+ card bust", "250:1"),
-    ]),
-]
-
 # (row, col) -> (y, x, height, width) for the currently-drawn wager cells,
 # used to hit-test mouse clicks. Populated by the most recent render() call.
 CellRects = Dict[Union[str, Tuple[int, int]], Tuple[int, int, int, int]]
@@ -169,6 +188,36 @@ def _center_x_right_bias(text: str, width: int, origin: int = 0) -> int:
     text one column right instead of left. Used for wager cell values."""
     pad = max(0, width - len(text))
     return origin + (pad + 1) // 2
+
+
+def _draw_window_border(win, max_y: int, max_x: int) -> None:
+    """A single-line box frame around the whole window. The bottom-right
+    corner cell is the one spot curses refuses a normal addstr() into (it
+    can't advance the cursor past it), so that one character goes in with
+    insstr() instead, which writes without moving the cursor."""
+    if max_y < 2 or max_x < 2:
+        return
+    try:
+        win.addstr(0, 0, "┌" + "─" * (max_x - 2) + "┐")
+    except curses.error:
+        pass
+    for row in range(1, max_y - 1):
+        try:
+            win.addstr(row, 0, "│")
+        except curses.error:
+            pass
+        try:
+            win.insstr(row, max_x - 1, "│")
+        except curses.error:
+            pass
+    try:
+        win.addstr(max_y - 1, 0, "└" + "─" * (max_x - 2))
+    except curses.error:
+        pass
+    try:
+        win.insstr(max_y - 1, max_x - 1, "┘")
+    except curses.error:
+        pass
 
 
 def _draw_filled_banner(win, y: int, x: int, width: int, text: str, attr: int) -> None:
@@ -221,23 +270,28 @@ def draw_card(win, y: int, x: int, card: Optional[Card], face_down: bool = False
         _safe_addstr(win, y + i, x, line, color)
 
 
-def _card_block_width(hand: Hand) -> int:
+def _card_block_width(hand: Hand, max_cards: Optional[int] = MAX_CARDS_IN_GRID) -> int:
     """Actual on-screen width of a hand's fanned card row as currently
     drawn -- i.e. draw_hand()'s footprint for however many cards it has
-    right now (capped at MAX_CARDS_IN_GRID, same as draw_hand itself),
-    not the worst-case 12-card width. Used to keep a hand's cards
-    centered on their actual width as it grows, rather than left-biased
-    inside a slot sized for the maximum possible hand."""
-    n = min(len(hand.cards), MAX_CARDS_IN_GRID)
+    right now (capped at max_cards, same as draw_hand itself), not a
+    worst-case width. Used to keep a hand's cards centered on their
+    actual width as it grows, rather than left-biased inside a slot
+    sized for the maximum possible hand. max_cards=None means uncapped
+    (the dealer's row -- it has no overflow ticker to fall back on, so
+    its whole hand is always shown, however long it gets)."""
+    n = len(hand.cards) if max_cards is None else min(len(hand.cards), max_cards)
     if n <= 0:
         return 0
     return CARD_W + FAN_OFFSET * (n - 1)
 
 
-def draw_hand(win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False) -> None:
+def draw_hand(
+    win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False,
+    max_cards: Optional[int] = MAX_CARDS_IN_GRID,
+) -> None:
     last_index = len(hand.cards) - 1
     for i, card in enumerate(hand.cards):
-        if i >= MAX_CARDS_IN_GRID:
+        if max_cards is not None and i >= max_cards:
             break  # rendered separately as an overflow-ticker chip -- see _draw_overflow_chips
         face_down = (hide_hole and i == 1) or (hide_last and i == last_index)
         draw_card(win, base_y, x + i * FAN_OFFSET, card, face_down=face_down)
@@ -383,7 +437,6 @@ def session_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
     sign_main = "+" if s.session_main_pl >= 0 else ""
     sign_side = "+" if s.session_sidebet_pl >= 0 else ""
     return [
-        ("Bankroll", money(session.bankroll)),
         ("Main Bet P/L $", f"{sign_main}{money(s.session_main_pl)}"),
         ("Side Bet P/L $", f"{sign_side}{money(s.session_sidebet_pl)}"),
         ("# Hands Played", str(s.hands_this_session)),
@@ -481,64 +534,96 @@ def _spot_payout_text(round_: Optional[Round], spot_index: int) -> str:
     if round_ is None or round_.phase != Phase.SETTLED:
         return ""
     total = sum(r.payout for r in round_.results if r.spot_index == spot_index)
-    return f"(${total:,.2f} returned)"
+    return f"${total:,.2f} returned"
 
 
 _SIDEBET_KEYS_ORDERED = ("power_poker", "star21", "dealer_buster")
 _BANNER_FRAME_MS = 1500
+_DEFAULT_BANNER_ATTR = curses.A_BOLD
 
 
-def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, float]]:
-    """[(label, win_amount), ...] for this spot's side bets that actually
-    won this round, in PP/S21/BUST order."""
+def _buster_stage(label: str) -> int:
+    """3-card bust -> 0, 4 -> 1, ... 7 -> 4, 8+ -> 5."""
+    if label.startswith("8+"):
+        return 5
+    try:
+        n = int(label.split()[0])
+    except (ValueError, IndexError):
+        return 0
+    return max(0, min(5, n - 3))
+
+
+def _sidebet_banner_attr(key: str, label: str) -> int:
+    """Color for one side bet's win banner frame, by which side bet and
+    which specific outcome it is (some outcomes get their own accent
+    color within the side bet's base color)."""
+    if key == "power_poker":
+        if label == "Royal Flush":
+            return curses.color_pair(9) | curses.A_BOLD
+        return curses.color_pair(8) | curses.A_BOLD
+    if key == "star21":
+        if label == "Suited 7-7-7 Diamonds":
+            return curses.color_pair(11) | curses.A_BOLD
+        return curses.color_pair(10) | curses.A_BOLD
+    if key == "dealer_buster":
+        return curses.color_pair(BUSTER_PAIR_BASE + _buster_stage(label)) | curses.A_BOLD
+    return _DEFAULT_BANNER_ATTR
+
+
+def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, str, float]]:
+    """[(key, label, win_amount), ...] for this spot's side bets that
+    actually won this round, in PP/S21/BUST order."""
     if round_.phase != Phase.SETTLED:
         return []
-    wins: List[Tuple[str, float]] = []
+    wins: List[Tuple[str, str, float]] = []
     for key in _SIDEBET_KEYS_ORDERED:
         display_name = SIDE_BET_LABELS[key]
         for sb in round_.side_bet_results:
             if sb.spot_index == spot.index and sb.name == display_name and sb.win_amount > 0:
-                wins.append((sb.label or display_name, sb.win_amount))
+                wins.append((key, sb.label or display_name, sb.win_amount))
     return wins
 
 
-def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[str]:
-    """Frames for the settlement flash animation: each winning side bet's
-    label, then its payout, in turn; if more than one side bet won, a
-    final frame with the combined total."""
+def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
+    """(text, attr) frames for the settlement flash animation: each
+    winning side bet's label, then its payout (both in that bet's color),
+    in turn; if more than one side bet won, a final plain frame with the
+    combined total."""
     wins = _spot_sidebet_wins(round_, spot)
     if not wins:
         return []
-    frames: List[str] = []
-    for label, amount in wins:
-        frames.append(_display_label(label))
-        frames.append(f"${amount:,.2f} returned")
+    frames: List[Tuple[str, int]] = []
+    for key, label, amount in wins:
+        attr = _sidebet_banner_attr(key, label)
+        frames.append((_display_label(label), attr))
+        frames.append((f"${amount:,.2f} returned", attr))
     if len(wins) > 1:
-        total = sum(amount for _, amount in wins)
-        frames.append(f"Side Bets Total: ${total:,.2f} returned")
+        total = sum(amount for _, _, amount in wins)
+        frames.append((f"Side Bets Total: ${total:,.2f} returned", _DEFAULT_BANNER_ATTR))
     return frames
 
 
-def _sidebet_live_wins(round_: Round, spot: Spot) -> List[str]:
-    """Win labels already confirmed for this spot before settlement.
-    Power Poker and Star21 are knowable as soon as the spot's first two
-    cards and the dealer's up card are dealt, so they can be confirmed on
-    screen right away and held there through the player's whole turn.
-    Dealer Buster has no such preview -- it depends on the dealer's full
-    hand, which isn't drawn until after the player is done -- so it never
-    appears here, only in the settlement flash sequence."""
-    labels = []
+def _sidebet_live_wins(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
+    """(text, attr) frames for win labels already confirmed for this spot
+    before settlement. Power Poker and Star21 are knowable as soon as the
+    spot's first two cards and the dealer's up card are dealt, so they
+    can be confirmed on screen right away and held there through the
+    player's whole turn. Dealer Buster has no such preview -- it depends
+    on the dealer's full hand, which isn't drawn until after the player
+    is done -- so it never appears here, only in the settlement flash
+    sequence."""
+    results: List[Tuple[str, int]] = []
     for key in ("power_poker", "star21"):
         wager = spot.side_bet_wagers.get(key, 0.0)
         if wager <= 0:
             continue
         label = round_.side_bet_preview_label(spot, key)
         if label:
-            labels.append(_display_label(label))
-    return labels
+            results.append((_display_label(label), _sidebet_banner_attr(key, label)))
+    return results
 
 
-def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> str:
+def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> Tuple[str, int]:
     """What the side-bet banner shows outside of a forced (settlement)
     frame sequence: the final settlement frame once settled (so the
     result stays legible after the animation ends), or -- while the round
@@ -548,21 +633,21 @@ def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> str:
     flickering during genuine idle time too, driven by _main's
     stdscr.timeout()-based redraws, not just when the player acts."""
     if round_ is None:
-        return ""
+        return "", _DEFAULT_BANNER_ATTR
     if round_.phase == Phase.SETTLED:
         seq = _sidebet_banner_flash_sequence(round_, spot)
-        return seq[-1] if seq else ""
+        return seq[-1] if seq else ("", _DEFAULT_BANNER_ATTR)
     wins = _sidebet_live_wins(round_, spot)
     if not wins:
-        return ""
+        return "", _DEFAULT_BANNER_ATTR
     frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(wins)
     return wins[frame]
 
 
-def _draw_result_row(win, y: int, x: int, width: int, text: str) -> None:
+def _draw_result_row(win, y: int, x: int, width: int, text: str, attr: int = curses.A_BOLD) -> None:
     if not text:
         return
-    _safe_addstr(win, y, _center_x(text, width, x), text, curses.A_BOLD)
+    _safe_addstr(win, y, _center_x(text, width, x), text, attr)
 
 
 def _active_hand_index(spot: Spot, round_: Round) -> int:
@@ -581,36 +666,47 @@ def _center_on(text: str, center_x: int) -> int:
     return max(0, center_x - len(text) // 2)
 
 
-def _draw_spot_value_row(
-    win, y: int, col_x: int, col_width: int, spot: Spot, round_: Round, active: Optional[Tuple[Spot, Hand]]
-) -> Tuple[Hand, int]:
-    """Draws, left to right: a single-asterisk collapsed-value chip for
-    each already-completed hand in this spot, then the '*** N ***' (or, if
-    any splits happened, also single-asterisk) live value for the one hand
-    whose cards are currently shown. Returns that hand, plus the x-center
-    of its own value text (not the whole row's center -- the row can be
-    off-center within the column once earlier collapsed chips are
-    present), so the status line and card row below can line up under it."""
+def _draw_player_spot(
+    win,
+    chips_y: int,
+    status_y: int,
+    cards_y: int,
+    overflow_y: int,
+    value_y: int,
+    cx: int,
+    col_width: int,
+    spot: Spot,
+    round_: Round,
+    active: Optional[Tuple[Spot, Hand]],
+) -> None:
+    """Draws a non-split-aces spot: any earlier completed split hands'
+    values collapse to a compact chips row above the cards (unchanged
+    from before), kept visually apart from the current hand's own value,
+    which sits between its cards and the wager box below -- cards, the
+    live value, and the status line all share the column's own center,
+    since the (separate, above) chips row no longer competes for that
+    same horizontal space the way a single combined row once did."""
     active_index = _active_hand_index(spot, round_)
-    parts: List[Tuple[str, int]] = []
-    for i in range(active_index):
-        text = _emph_compact(hand_value_label(spot.hands[i], resolved=True))
-        parts.append((text, curses.A_BOLD))
+    if active_index > 0:
+        chips_text = "   ".join(
+            _emph_compact(hand_value_label(spot.hands[j], resolved=True)) for j in range(active_index)
+        )
+        _safe_addstr(win, chips_y, _center_x(chips_text, col_width, cx), chips_text, curses.A_BOLD)
 
     hand = spot.hands[active_index]
-    emph = _emph if len(spot.hands) == 1 else _emph_compact
     is_active = active is not None and active[1] is hand
-    value_text = emph(hand_value_label(hand, resolved=hand.is_resolved))
-    parts.append((value_text, curses.A_REVERSE if is_active else curses.A_BOLD))
 
-    total_width = sum(len(t) for t, _ in parts) + 2 * (len(parts) - 1)
-    x = col_x + max(0, (col_width - total_width) // 2)
-    value_center_x = x
-    for text, attr in parts:
-        _safe_addstr(win, y, x, text, attr)
-        value_center_x = x + len(text) // 2
-        x += len(text) + 2
-    return hand, value_center_x
+    status = hand_status_text(hand, spot, round_)
+    is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
+    _safe_addstr(win, status_y, _center_x(status, col_width, cx), status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
+
+    hand_x = cx + max(0, (col_width - _card_block_width(hand)) // 2)
+    draw_hand(win, cards_y, hand_x, hand, hide_last=hand.double_hidden)
+    _draw_overflow_chips(win, overflow_y, hand_x, CARD_ROW_WIDTH, hand, hide_last=hand.double_hidden)
+
+    emph = _emph if len(spot.hands) == 1 else _emph_compact
+    value_text = emph(hand_value_label(hand, resolved=hand.is_resolved))
+    _safe_addstr(win, value_y, _center_x(value_text, col_width, cx), value_text, curses.A_REVERSE if is_active else curses.A_BOLD)
 
 
 SPLIT_ACE_GAP = 2  # columns of breathing room between adjacent split-ace hands
@@ -660,7 +756,7 @@ def render(
     bet_col: int = 0,
     bet_edit_buffer: str = "",
     input_focus: str = "wager",
-    banner_override: Optional[Dict[int, str]] = None,
+    banner_override: Optional[Dict[int, Tuple[str, int]]] = None,
 ) -> CellRects:
     stdscr.erase()
     win = stdscr
@@ -671,17 +767,22 @@ def render(
     # full-screen) terminal offers; horizontally, a fixed margin is used
     # instead (see MARGIN_COLS) so the table stretches to fill the space
     # between the margins rather than being pinned to a fixed width.
+    _draw_window_border(win, max_y, max_x)
     left_margin = MARGIN_COLS
     usable_width = max(0, max_x - 2 * MARGIN_COLS)
-    y_origin = max(0, (max_y - CONTENT_HEIGHT) // 2)
+    # Content is inset 1 row inside the window border drawn above (top and
+    # bottom), so it never centers over top of it.
+    y_origin = max(1, (max_y - CONTENT_HEIGHT) // 2)
     right_edge = left_margin + usable_width
     col_width = usable_width // NUM_SPOT_COLUMNS
     col_x = [left_margin + i * col_width for i in range(NUM_SPOT_COLUMNS)]
 
     cell_rects: CellRects = {}
 
-    # ---- Header: title, rules-summary banner (+ bankroll), table-status
-    # banner (min/max, surrender, DAS, RSA) ----
+    # ---- Header: title, rules-summary banner (+ card count, bankroll),
+    # table-status banner (+ running/true count), min/max, surrender, DAS,
+    # RSA), then a divider before the dealer's area ----
+    shoe = session.shoe
     y = y_origin
     title = "CasinoSimulations™ Blackjack"
     _safe_addstr(win, y, _center_x(title, usable_width, left_margin), title, curses.A_BOLD)
@@ -689,13 +790,23 @@ def render(
 
     top_line = rules_summary(session)
     _draw_filled_banner(win, y, left_margin, usable_width, top_line, curses.color_pair(4) | curses.A_BOLD)
+    cards_dealt_text = f"Cards Dealt: {shoe.cards_remaining}({shoe.cards_dealt})"
+    _safe_addstr(win, y, left_margin, cards_dealt_text, curses.color_pair(4) | curses.A_BOLD)
+    cell_rects["cards_dealt"] = (y, left_margin, 1, len(cards_dealt_text))
     bankroll_text = f"Bankroll: {money(session.bankroll)}"
-    _safe_addstr(win, y, max(left_margin, right_edge - len(bankroll_text)), bankroll_text, curses.color_pair(4) | curses.A_BOLD)
+    bankroll_x = max(left_margin, right_edge - len(bankroll_text))
+    _safe_addstr(win, y, bankroll_x, bankroll_text, curses.color_pair(4) | curses.A_BOLD)
+    _safe_addstr(win, y, bankroll_x, "Bankroll:", curses.color_pair(6) | curses.A_BOLD)
     y += 1
 
     status_line = table_status_summary(session)
     _draw_filled_banner(win, y, left_margin, usable_width, status_line, curses.color_pair(5) | curses.A_BOLD)
-    y += 2  # blank row
+    counts_text = f"Running: {shoe.running_count:+d}   True: {shoe.true_count:+.1f}"
+    _safe_addstr(win, y, left_margin, counts_text, curses.color_pair(5) | curses.A_BOLD)
+    y += 1
+
+    _safe_addstr(win, y, left_margin, "-" * max(usable_width, 0))
+    y += 1  # divider row
 
     # ---- DEALER: status line (blank unless BUST/BLACKJACK), value line,
     # then cards directly beneath with no gap (no "DEALER" label) ----
@@ -715,19 +826,21 @@ def render(
     # Center on the dealer's actual card count as it grows (not a slot
     # sized for the worst-case 12-card hand), so the row stays centered
     # under the dealer's value line -- and the screen -- as they draw,
-    # instead of sitting left-biased inside a too-wide fixed slot.
-    dealer_x = left_margin + max(0, (usable_width - _card_block_width(dealer_hand)) // 2)
+    # instead of sitting left-biased inside a too-wide fixed slot. The
+    # dealer's hand is never capped/overflowed -- it has its own row with
+    # room to spare, unlike a player spot, so the whole hand always shows.
+    dealer_x = left_margin + max(0, (usable_width - _card_block_width(dealer_hand, max_cards=None)) // 2)
     if round_:
-        draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole)
+        draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
     y += CARD_BLOCK_HEIGHT
-    dealer_overflow_y = y
-    if round_ and not hide_hole:
-        _draw_overflow_chips(win, dealer_overflow_y, dealer_x, CARD_ROW_WIDTH, dealer_hand)
-    y += 1 + 2  # dealer overflow-chip row, plus a two-row buffer before the player's area
+    y += 1  # buffer before the player's area
 
-    # ---- PLAYER: value line (collapsed split-hand chips + live value),
-    # status line, then the currently-shown hand's cards ----
-    value_y = y
+    # ---- PLAYER: collapsed chips for any already-completed split hands
+    # (above the cards, where they've always been) -> status -> cards ->
+    # overflow -> the CURRENT hand's own value, between the cards and the
+    # wager box with a small buffer -- keeps the collapsed (done) and
+    # live (in-progress) values visually apart instead of side by side. ----
+    chips_y = y
     y += 1
     status_y = y
     y += 1
@@ -735,6 +848,9 @@ def render(
     y += CARD_BLOCK_HEIGHT
     player_overflow_y = y
     y += 1
+    active_value_y = y
+    y += 1
+    y += 1  # buffer before the wager box's top border
 
     # ---- Per-spot wager block: main wager, its payout, side-bet
     # header/boxes, then the side-bet win/payout banner ----
@@ -759,19 +875,14 @@ def render(
             spot = round_.spots[i]
             if spot.hands and spot.hands[0].is_split_aces:
                 _draw_split_ace_hands(
-                    win, value_y, status_y, player_cards_base_y, player_overflow_y,
+                    win, chips_y, status_y, player_cards_base_y, player_overflow_y,
                     cx, col_width, spot, round_, active,
                 )
             else:
-                shown_hand, value_center_x = _draw_spot_value_row(win, value_y, cx, col_width, spot, round_, active)
-
-                status = hand_status_text(shown_hand, spot, round_)
-                is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
-                _safe_addstr(win, status_y, _center_on(status, value_center_x), status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
-
-                hand_x = value_center_x - _card_block_width(shown_hand) // 2
-                draw_hand(win, player_cards_base_y, hand_x, shown_hand, hide_last=shown_hand.double_hidden)
-                _draw_overflow_chips(win, player_overflow_y, hand_x, CARD_ROW_WIDTH, shown_hand, hide_last=shown_hand.double_hidden)
+                _draw_player_spot(
+                    win, chips_y, status_y, player_cards_base_y, player_overflow_y, active_value_y,
+                    cx, col_width, spot, round_, active,
+                )
 
         # Wager grid: always drawn for all three spots (regardless of how many
         # hands are actually in play this round) so wagers stay visible,
@@ -791,10 +902,11 @@ def render(
             spot = round_.spots[i]
             _draw_result_row(win, payout_row_y, cx, col_width, _spot_payout_text(round_, i))
             if banner_override is not None:
-                banner_text = banner_override.get(i, "")
+                banner_text, banner_attr = banner_override.get(i, ("", _DEFAULT_BANNER_ATTR))
             else:
-                banner_text = _sidebet_banner_default_text(round_, spot)
-            _draw_result_row(win, banner_row_y, cx, col_width, banner_text)
+                banner_text, banner_attr = _sidebet_banner_default_text(round_, spot)
+            if banner_text:
+                _draw_filled_banner(win, banner_row_y, cx, col_width, banner_text, banner_attr)
 
     # ---- Hint / message line (shows the active message in place of the
     # contextual hint when there is one) ----
@@ -830,57 +942,55 @@ def render(
     _safe_addstr(win, input_y, left_margin, f"> {buffer}", curses.A_REVERSE if cli_focused else 0)
     cell_rects["cli"] = (input_y, left_margin, 1, max(1, usable_width))
 
-    # ---- Stats panel: card counting in the leftmost quarter, Session
-    # (2x6) and Lifetime (2x6) sharing the remaining three quarters --
-    # also available full-screen any time via the 'stats' command. ----
+    # ---- Stats panel: the 3 side-bet payout tables side by side on the
+    # left, Session (2x6) and Lifetime (2x6) sharing the rest -- also
+    # available full-screen any time via the 'stats' command. Every
+    # column here follows the same convention: name left-aligned, value
+    # right-aligned, so long $ P/L figures never crowd the label. ----
     divider_y = input_y + 2
     _safe_addstr(win, divider_y, left_margin, "-" * max(usable_width, 0))
     stats_y = divider_y + 1
 
-    quarter_w = max(1, usable_width // 4)
-    counting_x = left_margin
-    divider_x = left_margin + quarter_w - 2
-    stats_x0 = left_margin + quarter_w
+    payout_x0 = left_margin
+    payout_region_w = PAYOUT_COL_W * 3 + PAYOUT_GAP * 2
+    divider_x = payout_x0 + payout_region_w + 1
+    stats_x0 = divider_x + 3
+
+    payout_value_w = 7  # fits "5000:1", the widest odds figure, plus a pad column
+    payout_label_w = PAYOUT_COL_W - payout_value_w
+    for slot, (title, rows) in enumerate(PAYOUT_TABLES):
+        tx = payout_x0 + slot * (PAYOUT_COL_W + PAYOUT_GAP)
+        _safe_addstr(win, stats_y, tx, title, curses.A_BOLD | curses.A_UNDERLINE)
+        for i, (label, odds) in enumerate(rows):
+            line = f"{label[:payout_label_w]:<{payout_label_w}}{odds:>{payout_value_w}}"
+            _safe_addstr(win, stats_y + 1 + i, tx, line)
+
+    for dy in range(STATS_BLOCK_ROWS + 1):
+        _safe_addstr(win, stats_y + dy, divider_x, "│", curses.A_DIM)
 
     session_rows = session_stats_rows(session)
     life_rows = lifetime_stats_rows(session)
     sess_a, sess_b = session_rows[:STATS_SESSION_ROWS], session_rows[STATS_SESSION_ROWS:]
     life_a, life_b = life_rows[:STATS_LIFETIME_ROWS], life_rows[STATS_LIFETIME_ROWS:]
 
-    stats_col_w = max(1, (usable_width - quarter_w) // 4)
+    stats_region_w = max(1, usable_width - (stats_x0 - left_margin))
+    stats_col_w = max(1, stats_region_w // 4)
     sess_a_x = stats_x0
     sess_b_x = stats_x0 + stats_col_w
     life_a_x = stats_x0 + 2 * stats_col_w
     life_b_x = stats_x0 + 3 * stats_col_w
 
-    shoe = session.shoe
-    counting_rows = [
-        ("Cards Left(Dealt)", f"{shoe.cards_remaining}({shoe.cards_dealt})"),
-        ("Running Count", f"{shoe.running_count:+d}"),
-        ("True Count", f"{shoe.true_count:+.1f}"),
-    ]
-    counting_row_w = max(0, (divider_x - counting_x) - 1)
-    _safe_addstr(win, stats_y, counting_x, "CARD COUNTING", curses.A_BOLD | curses.A_UNDERLINE)
-    for i, (label, value) in enumerate(counting_rows):
-        _safe_addstr(win, stats_y + 1 + i, counting_x, f"{label:<18}{value}"[:counting_row_w])
-
-    for dy in range(STATS_MAX_ROWS + 1):
-        _safe_addstr(win, stats_y + dy, divider_x, "│", curses.A_DIM)
-
     _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
     _safe_addstr(win, stats_y, life_a_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
 
-    # Each sub-column only gets a quarter of the *remaining* three-quarters
-    # width now that card counting has its own quarter (see above) -- too
-    # narrow for the full-screen overlay's 18-char label field, so the
-    # label shrinks to fit and the whole row is hard-clipped to the
-    # column's width so a long value can never bleed into the next column.
+    # The row is hard-clipped to the column's width so a long value can
+    # never bleed into the next column even in a narrower terminal.
     row_w = max(0, stats_col_w - 1)
     value_w = 10  # keeps money/percent values intact; the label truncates first if space is tight
-    label_w = max(4, row_w - value_w - 1)
+    label_w = max(4, row_w - value_w)
     for col_x_, rows in ((sess_a_x, sess_a), (sess_b_x, sess_b), (life_a_x, life_a), (life_b_x, life_b)):
         for i, (label, value) in enumerate(rows):
-            line = f"{label[:label_w]:<{label_w}} {value}"
+            line = f"{label[:label_w]:<{label_w}}{value:>{value_w}}"
             _safe_addstr(win, stats_y + 1 + i, col_x_, line[:row_w])
 
     win.refresh()
@@ -945,23 +1055,12 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
 def render_stats_screen(stdscr, session: GameSession) -> None:
     lines: List[str] = ["LIFETIME STATS"]
     for label, value in lifetime_stats_rows(session):
-        lines.append(f"  {label:<18}{value}")
+        lines.append(f"  {label:<18}{value:>12}")
     lines.append("")
     lines.append("SESSION STATS")
     for label, value in session_stats_rows(session):
-        lines.append(f"  {label:<18}{value}")
+        lines.append(f"  {label:<18}{value:>12}")
     _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
-
-
-def render_payouts_screen(stdscr) -> None:
-    lines: List[str] = []
-    for i, (title, rows) in enumerate(PAYOUT_TABLES):
-        if i:
-            lines.append("")
-        lines.append(title)
-        for label, odds in rows:
-            lines.append(f"  {label:<28}{odds}")
-    _render_overlay_lines(stdscr, "cs-blackjack -- Payout Tables", lines)
 
 
 def render_betspread_screen(stdscr) -> None:
@@ -979,18 +1078,23 @@ def render_betspread_screen(stdscr) -> None:
 
 
 def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> None:
-    msg = "*** NEW SHOE ***"
-    max_y, max_x = stdscr.getmaxyx()
-    left_margin = MARGIN_COLS
-    usable_width = max(0, max_x - 2 * MARGIN_COLS)
-    y_origin = max(0, (max_y - CONTENT_HEIGHT) // 2)
-    x = max(left_margin, left_margin + usable_width - len(msg))
+    """Flashes over the header's "Cards Dealt" cell -- white background,
+    black text -- so a fresh shoe is unmistakable right where the count
+    that just reset to a full shoe lives."""
+    msg = "** NEW SHOE **"
+    attr = curses.color_pair(7) | curses.A_BOLD
     for i in range(6):
-        render(stdscr, session, round_, "", "")
+        cell_rects = render(stdscr, session, round_, "", "")
         if i % 2 == 0:
-            _safe_addstr(stdscr, y_origin, x, msg, curses.A_REVERSE | curses.A_BOLD)
+            y, x, _h, w = cell_rects.get("cards_dealt", (0, 0, 1, 0))
+            width = max(w, len(msg))
+            _safe_addstr(stdscr, y, x, " " * width, attr)
+            _safe_addstr(stdscr, y, x, msg, attr)
             stdscr.refresh()
         curses.napms(220)
+
+
+BUSTER_PAIR_BASE = 12  # 6 pairs, one per bust-length stage (3,4,5,6,7,8+ cards)
 
 
 def init_colors() -> None:
@@ -1005,6 +1109,35 @@ def init_colors() -> None:
     curses.init_pair(3, curses.COLOR_BLUE, bg)
     curses.init_pair(4, curses.COLOR_WHITE, curses.COLOR_BLUE)  # top rules line: white on blue
     curses.init_pair(5, curses.COLOR_WHITE, curses.COLOR_RED)  # table-status banner: white on red
+    curses.init_pair(6, curses.COLOR_YELLOW, curses.COLOR_BLUE)  # header "Bankroll:" text
+    curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_WHITE)  # new-shoe flash: black on white
+    curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_MAGENTA)  # Power Poker win
+    curses.init_pair(9, curses.COLOR_YELLOW, curses.COLOR_MAGENTA)  # Power Poker: Royal Flush
+    curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_GREEN)  # Star21 win
+    curses.init_pair(11, curses.COLOR_YELLOW, curses.COLOR_GREEN)  # Star21: Suited 7-7-7 Diamonds
+
+    # Dealer Buster: a light-to-deep orange ramp, one pair per bust length
+    # (3 cards through 8+), with text color flipping from black to white
+    # to gold as the background darkens. True orange needs the extended
+    # palette; on a basic 8-color terminal, approximate the ramp with
+    # yellow (light stages) shading into red (deep stages) instead.
+    if curses.COLORS >= 256:
+        oranges = [230, 223, 216, 209, 208, 202]  # xterm-256: light -> deep orange
+        texts = [
+            curses.COLOR_BLACK, curses.COLOR_BLACK, curses.COLOR_BLACK,
+            curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_YELLOW,
+        ]
+    else:
+        oranges = [
+            curses.COLOR_YELLOW, curses.COLOR_YELLOW, curses.COLOR_YELLOW,
+            curses.COLOR_RED, curses.COLOR_RED, curses.COLOR_RED,
+        ]
+        texts = [
+            curses.COLOR_BLACK, curses.COLOR_BLACK, curses.COLOR_BLACK,
+            curses.COLOR_WHITE, curses.COLOR_WHITE, curses.COLOR_YELLOW,
+        ]
+    for stage, (bg_color, fg_color) in enumerate(zip(oranges, texts)):
+        curses.init_pair(BUSTER_PAIR_BASE + stage, fg_color, bg_color)
 
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
@@ -1025,7 +1158,7 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         sequences = {i: _sidebet_banner_flash_sequence(round_, spot) for i, spot in enumerate(round_.spots)}
         max_len = max((len(seq) for seq in sequences.values()), default=0)
         for step in range(max_len):
-            frames = {i: (seq[min(step, len(seq) - 1)] if seq else "") for i, seq in sequences.items()}
+            frames = {i: (seq[min(step, len(seq) - 1)] if seq else ("", _DEFAULT_BANNER_ATTR)) for i, seq in sequences.items()}
             render(stdscr, session, round_, "", "", banner_override=frames)
             curses.napms(1500)
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
@@ -1055,9 +1188,6 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
         return ""
     if stripped == "betspread":
         render_betspread_screen(stdscr)
-        return ""
-    if stripped == "payouts":
-        render_payouts_screen(stdscr)
         return ""
     if stripped == "stats":
         render_stats_screen(stdscr, session)
