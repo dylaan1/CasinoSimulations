@@ -123,12 +123,12 @@ PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
         ("Any 19", "2:1"),
     ]),
     ("Dealer Buster", [
-        ("Dealer busts on 3 cards", "2:1"),
-        ("Dealer busts on 4 cards", "3:1"),
-        ("Dealer busts on 5 cards", "12:1"),
-        ("Dealer busts on 6 cards", "50:1"),
-        ("Dealer busts on 7 cards", "100:1"),
-        ("Dealer busts on 8+ cards", "250:1"),
+        ("3 cards", "2:1"),
+        ("4 cards", "3:1"),
+        ("5 cards", "12:1"),
+        ("6 cards", "50:1"),
+        ("7 cards", "100:1"),
+        ("8+ cards", "250:1"),
     ]),
 ]
 
