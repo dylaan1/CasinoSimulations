@@ -65,12 +65,12 @@ PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
         ("Any 19", "2:1"),
     ]),
     ("Buster", [
-        ("3 card bust", "2:1"),
-        ("4 card bust", "3:1"),
-        ("5 card bust", "12:1"),
-        ("6 card bust", "50:1"),
-        ("7 card bust", "100:1"),
         ("8+ card bust", "250:1"),
+        ("7 card bust", "100:1"),
+        ("6 card bust", "50:1"),
+        ("5 card bust", "12:1"),
+        ("4 card bust", "3:1"),
+        ("3 card bust", "2:1"),
     ]),
 ]
 PAYOUT_COL_W = 23  # label + right-aligned odds, per mini table
@@ -587,8 +587,9 @@ def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, str, float]
 def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
     """(text, attr) frames for the settlement flash animation: each
     winning side bet's label, then its payout (both in that bet's color),
-    in turn; if more than one side bet won, a final plain frame with the
-    combined total."""
+    in turn, always followed by a final dark-gray frame with the combined
+    total -- even with only one winning side bet -- so every settlement
+    ends the same way regardless of how many side bets hit."""
     wins = _spot_sidebet_wins(round_, spot)
     if not wins:
         return []
@@ -597,9 +598,8 @@ def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[Tuple[str,
         attr = _sidebet_banner_attr(key, label)
         frames.append((_display_label(label), attr))
         frames.append((f"${amount:,.2f} returned", attr))
-    if len(wins) > 1:
-        total = sum(amount for _, _, amount in wins)
-        frames.append((f"Side Bets Total: ${total:,.2f} returned", _DEFAULT_BANNER_ATTR))
+    total = sum(amount for _, _, amount in wins)
+    frames.append((f"Side Bets Total: ${total:,.2f} returned", curses.color_pair(SIDEBET_TOTAL_PAIR) | curses.A_BOLD))
     return frames
 
 
@@ -790,7 +790,7 @@ def render(
 
     top_line = rules_summary(session)
     _draw_filled_banner(win, y, left_margin, usable_width, top_line, curses.color_pair(4) | curses.A_BOLD)
-    cards_dealt_text = f"Cards Dealt: {shoe.cards_remaining}({shoe.cards_dealt})"
+    cards_dealt_text = f"Cards Left: {shoe.cards_remaining}({shoe.cards_dealt})"
     _safe_addstr(win, y, left_margin, cards_dealt_text, curses.color_pair(4) | curses.A_BOLD)
     cell_rects["cards_dealt"] = (y, left_margin, 1, len(cards_dealt_text))
     bankroll_text = f"Bankroll: {money(session.bankroll)}"
@@ -987,10 +987,11 @@ def render(
     # never bleed into the next column even in a narrower terminal.
     row_w = max(0, stats_col_w - 1)
     value_w = 10  # keeps money/percent values intact; the label truncates first if space is tight
-    label_w = max(4, row_w - value_w)
+    label_value_gap = 2  # breathing room so the longest labels (e.g. "Dealer Blackjacks") never butt up against the value
+    label_w = max(4, row_w - value_w - label_value_gap)
     for col_x_, rows in ((sess_a_x, sess_a), (sess_b_x, sess_b), (life_a_x, life_a), (life_b_x, life_b)):
         for i, (label, value) in enumerate(rows):
-            line = f"{label[:label_w]:<{label_w}}{value:>{value_w}}"
+            line = f"{label[:label_w]:<{label_w}}{'':<{label_value_gap}}{value:>{value_w}}"
             _safe_addstr(win, stats_y + 1 + i, col_x_, line[:row_w])
 
     win.refresh()
@@ -1078,7 +1079,7 @@ def render_betspread_screen(stdscr) -> None:
 
 
 def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> None:
-    """Flashes over the header's "Cards Dealt" cell -- white background,
+    """Flashes over the header's "Cards Left" cell -- white background,
     black text -- so a fresh shoe is unmistakable right where the count
     that just reset to a full shoe lives."""
     msg = "** NEW SHOE **"
@@ -1095,6 +1096,7 @@ def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> No
 
 
 BUSTER_PAIR_BASE = 12  # 6 pairs, one per bust-length stage (3,4,5,6,7,8+ cards)
+SIDEBET_TOTAL_PAIR = 18  # "Side Bets Total" summary frame: dark gray
 
 
 def init_colors() -> None:
@@ -1138,6 +1140,13 @@ def init_colors() -> None:
         ]
     for stage, (bg_color, fg_color) in enumerate(zip(oranges, texts)):
         curses.init_pair(BUSTER_PAIR_BASE + stage, fg_color, bg_color)
+
+    # "Side Bets Total" frame: a neutral dark gray, distinct from any
+    # individual side bet's own color, since it's a summary line rather
+    # than a specific bet's result. True gray needs the extended palette;
+    # on a basic 8-color terminal, black is the closest approximation.
+    gray_bg = 238 if curses.COLORS >= 256 else curses.COLOR_BLACK
+    curses.init_pair(SIDEBET_TOTAL_PAIR, curses.COLOR_WHITE, gray_bg)
 
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
