@@ -45,7 +45,7 @@ HELP_LINES = [
     "",
     "REFERENCE",
     "  betspread                      Show the $10/$25/$100 bet spread reference tables",
-    "  payouts                        Show the side bet payout/odds tables",
+    "  (side bet payout odds are shown live in the stats bar below the table)",
     "",
     "WAGERS",
     "  Arrow keys (or a mouse click) move around the betting grid; type",
