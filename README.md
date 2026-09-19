@@ -22,7 +22,7 @@ you can rehearse bet-spread strategy against a realistic table.
   splits (up to the configured max, including resplit aces) tracked
   independently per hand.
 - **Three side bets**, each with its own paytable and settlement line:
-  - **Power Poker** — your first two cards plus the dealer's up-card,
+  - **PowerPoker** — your first two cards plus the dealer's up-card,
     scored as a 3-card poker hand (trips, straight, flush, straight flush,
     royal flush).
   - **Star21** — the same three cards summed like a 21 total, with bonus
@@ -60,10 +60,8 @@ you can rehearse bet-spread strategy against a realistic table.
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **402x48** — the layout uses a
-  fixed side margin and reserves room for a fully split 12-hand table, so it
-  needs a genuinely wide terminal; it will refuse to draw the table and show
-  a "too small" message below that size
+  escape sequence on launch) and is at least **150x46** — it will refuse
+  to draw the table and show a "too small" message below that size
 
 No third-party packages are required to run the game itself.
 
