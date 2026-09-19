@@ -392,7 +392,10 @@ class Round:
         if not self._hand_needs_play(spot, hand):
             return set()
         if hand.is_split_aces and len(hand.cards) >= 2:
-            return {"split"}
+            # Only reachable when a resplit is actually available (see
+            # _hand_needs_play) -- resplitting is the player's choice, not
+            # forced, so standing pat on the one-card hand is equally legal.
+            return {"split", "stand"}
         actions = {"hit", "stand"}
         if self._can_double(hand):
             actions.add("double")
@@ -512,6 +515,12 @@ class Round:
 
         hand.add_card(self.session.shoe.draw())
         new_hand.add_card(self.session.shoe.draw())
+        if is_aces and self.rules.rsa_facedown:
+            # Same face-down-until-reveal mechanic as a double-down card --
+            # only reachable with RSA off (see commands.py), so each split
+            # gets exactly one hidden card per hand, no resplit to chase.
+            hand.double_hidden = True
+            new_hand.double_hidden = True
         spot.hands.insert(self._current_hand_index + 1, new_hand)
         self.session.stats.record_split()
 
@@ -625,6 +634,8 @@ class Round:
                 label, multiplier = outcome if outcome else (None, 0.0)
                 if key == "star21" and label == "Suited 7-7-7 Diamonds":
                     self.session.stats.record_blazing_seven()
+                if key == "power_poker" and label == "Royal Flush":
+                    self.session.stats.record_royal_flush()
 
                 wager = spot.side_bet_wagers.get(key, 0.0)
                 if wager <= 0:
