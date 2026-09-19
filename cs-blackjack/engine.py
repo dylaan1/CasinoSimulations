@@ -149,9 +149,11 @@ class GameSession:
         self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
 
     def reset_session(self) -> None:
-        """Forcibly cut a brand-new shoe and clear session-scoped stats."""
+        """Forcibly cut a brand-new shoe, clear session-scoped stats, and
+        reset the bankroll to its configured default (see 'bank default')."""
         self.reset_shoe()
         self.stats.reset_session()
+        self.bankroll = self.rules.default_bankroll
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
         """Set the main wager for a hand slot. Returns an error string, or None on success.

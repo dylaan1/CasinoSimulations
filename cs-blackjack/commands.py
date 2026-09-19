@@ -27,6 +27,7 @@ HELP_LINES = [
     "BANKROLL",
     "  bank N                         Set bankroll to N",
     "  bank add N                     Add N to bankroll",
+    "  bank default N                 Set the bankroll 'newsession'/hardreset reset to",
     "",
     "TABLE SETUP",
     "  hands 1-3                      Simultaneous hands to play",
@@ -38,11 +39,12 @@ HELP_LINES = [
     "",
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
-    "  newsession                     Reset shoe + session stats (RETURN confirms)",
-    "  hardreset                      Reset LIFETIME stats to zero (type 'confirm')",
+    "  newsession                     Reset shoe + session stats + bankroll (RETURN confirms)",
+    "  hardreset                      Reset lifetime stats + newsession (type 'confirm')",
     "",
-    "BET SPREAD",
+    "REFERENCE",
     "  betspread                      Show the $10/$25/$100 bet spread reference tables",
+    "  payouts                        Show the side bet payout/odds tables",
     "",
     "WAGERS",
     "  Arrow keys (or a mouse click) move around the betting grid; type",
@@ -67,16 +69,16 @@ _SIDEBET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_bu
 
 
 def handle_command(raw: str, session: "GameSession") -> str:
-    """Parse and apply a settings/betting command, returning a feedback string."""
+    """Parse and apply a settings/betting command, returning a feedback string.
+
+    Note: the 'confirm' response to a pending hardreset is intercepted
+    earlier, in ui.py's _dispatch_command -- it needs stdscr (to blink the
+    new shoe) and the current round (to refuse mid-round), neither of
+    which this presentation-agnostic layer has access to.
+    """
     raw = raw.strip()
     if not raw:
         return ""
-    if session.pending_hard_reset:
-        session.pending_hard_reset = False
-        if raw.lower() == "confirm":
-            session.stats.reset_lifetime()
-            return "Lifetime stats reset to zero."
-        return "Hard reset cancelled."
     try:
         tokens = shlex.split(raw.lower())
     except ValueError as exc:
@@ -200,6 +202,12 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
             amt = _parse_float(_require(rest, 1, "bank add N"), "bank add")
             session.adjust_bankroll(amt)
             return f"Bankroll +${amt:,.2f} -> ${session.bankroll:,.2f}"
+        if rest and rest[0] == "default":
+            amt = _parse_float(_require(rest, 1, "bank default N"), "bank default")
+            if amt < 0:
+                raise CommandError("default bankroll cannot be negative")
+            rules.default_bankroll = amt
+            return f"Default starting bankroll set to ${amt:,.2f} (applies on 'newsession' or 'hardreset')"
         amt = _parse_float(_require(rest, 0, "bank N"), "bank")
         if amt < 0:
             raise CommandError("bankroll cannot be negative")
@@ -226,7 +234,11 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
 
     if head == "hardreset":
         session.pending_hard_reset = True
-        return "Type 'confirm' to permanently reset ALL lifetime stats to zero (anything else cancels)."
+        return (
+            "Type 'confirm' to permanently reset ALL lifetime stats to zero, "
+            "start a new session (shoe + session stats), and reset the bankroll "
+            "to its default (anything else cancels)."
+        )
 
     if head in ("help", "?"):
         return HELP_TEXT
