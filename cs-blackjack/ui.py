@@ -38,14 +38,14 @@ MIN_COL_WIDTH = max(CARD_ROW_WIDTH, SIDEBET_GROUP_W, MAIN_WAGER_BOX_W)
 MIN_COLS = 2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS
 
 # ---- Vertical content budget ----
-# Rows, top to bottom: header(2) + blank(1) + dealer value/status(2) +
-# dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-ticker row(1) +
-# buffer(2) + player value row(1) + player status(1) + player cards
+# Rows, top to bottom: header(3, incl. bankroll) + blank(1) + dealer
+# value/status(2) + dealer cards(CARD_BLOCK_HEIGHT) + dealer overflow-ticker
+# row(1) + buffer(2) + player value row(1) + player status(1) + player cards
 # (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + main wager box(3) +
 # main wager payout row(1) + side-bet titles(1) + side-bet boxes(3) +
 # side-bet win/payout banner row(1) + hint/message(1) + blank(1) + input(1).
 CONTENT_HEIGHT = (
-    2 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 1
+    3 + 1 + 2 + CARD_BLOCK_HEIGHT + 1 + 2 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 3 + 1 + 1 + 3 + 1
     + 1 + 1 + 1
 )
 MIN_LINES = CONTENT_HEIGHT + 1
@@ -577,6 +577,9 @@ def render(
     shoe = session.shoe
     counts = f"Running: {shoe.running_count:+d}   True: {shoe.true_count:+.1f}"
     _safe_addstr(win, y, max(left_margin, right_edge - len(counts)), counts, curses.A_DIM)
+    y += 1
+    bankroll_text = f"Bankroll: {money(session.bankroll)}"
+    _safe_addstr(win, y, max(left_margin, right_edge - len(bankroll_text)), bankroll_text, curses.A_DIM)
     y += 2  # blank row
 
     # ---- DEALER: value line, status line, then cards (no "DEALER" label) ----
