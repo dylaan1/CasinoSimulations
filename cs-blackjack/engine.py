@@ -21,6 +21,37 @@ OUTCOME_LABELS = {
 SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
 SIDE_BET_LABELS = {"power_poker": "PowerPoker", "star21": "Star21", "dealer_buster": "Dealer Buster"}
 
+# Spot index -> its on-screen column slot (0=left, 1=middle, 2=right). Spot 0
+# ("Hand #1") sits front-and-center under the dealer since it's the one spot
+# that's always in play; spots 1 and 2 ("Hand #2"/"#3") fill outward to the
+# left and right as more hands are added. This mapping is its own inverse
+# (slot -> spot uses the same array), which is what lets the UI's left/right
+# arrow-key wager-grid navigation just run it both ways.
+SPOT_SCREEN_ORDER = [1, 0, 2]
+
+
+def table_order(num_hands: int) -> List[int]:
+    """Spot indices in traditional real-table order: rightmost active
+    screen position first, working left -- mirrors SPOT_SCREEN_ORDER's
+    spot->screen mapping. This is the single order that dealing, the
+    early-surrender/insurance prompts, and the player's turn all follow,
+    so cards, decisions, and play always proceed the same direction
+    around the table."""
+    return sorted(range(num_hands), key=lambda i: -SPOT_SCREEN_ORDER[i])
+
+
+def initial_deal_sequence(order: List[int]) -> List[Optional[int]]:
+    """Flat recipient order (spot index, or None for the dealer) matching
+    Round's actual two-pass initial deal -- each spot in `order` gets a
+    card, then the dealer, twice. Used by the UI to animate the deal
+    card-by-card in the same order it actually happened."""
+    seq: List[Optional[int]] = []
+    for _ in range(2):
+        seq.extend(order)
+        seq.append(None)
+    return seq
+
+
 # American-style peek: the dealer checks their hole card for blackjack whenever
 # the up card is an Ace or any ten-value card. Insurance/even money are only
 # ever offered on an Ace up card -- a ten-value peek is silent (no side bet),
@@ -240,10 +271,17 @@ class Round:
             for i in range(num_hands)
         ]
 
-        # Standard deal order: each spot gets a card, then the dealer, twice.
+        # Table order: rightmost active screen spot first, working left --
+        # see table_order() -- reused for dealing, early-surrender/insurance
+        # prompts, and the player's turn, so the whole round proceeds
+        # around the table in one consistent direction.
+        self.play_order: List[int] = table_order(num_hands)
+
+        # Standard deal order: each active spot gets a card (in table
+        # order), then the dealer, twice.
         for _ in range(2):
-            for spot in self.spots:
-                spot.hands[0].add_card(session.shoe.draw())
+            for i in self.play_order:
+                self.spots[i].hands[0].add_card(session.shoe.draw())
             self.dealer_hand.add_card(session.shoe.draw())
 
         # Side bets key off each spot's original two cards -- snapshot them
@@ -258,7 +296,7 @@ class Round:
         self.results: List[HandResult] = []
         self.side_bet_results: List[SideBetResult] = []
 
-        self._current_spot_index = 0
+        self._play_cursor = 0
         self._current_hand_index = 0
         self._prelim_index = 0
         self._dealer_draw_iter: Optional[Iterator[Hand]] = None
@@ -273,6 +311,11 @@ class Round:
             else:
                 self._resolve_peek()
         else:
+            # No peek possible on a 2-9 up card (a natural blackjack always
+            # needs an Ace or ten-value up card) -- any player blackjack is
+            # therefore already a guaranteed win, so it settles right away
+            # rather than waiting on the rest of the round.
+            self._settle_immediate_blackjacks()
             self.phase = Phase.PLAYER_TURN
             self._advance_player_cursor()
 
@@ -281,8 +324,8 @@ class Round:
     # ------------------------------------------------------------------
 
     def current_prelim_spot(self) -> Optional[Spot]:
-        if self.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE) and self._prelim_index < len(self.spots):
-            return self.spots[self._prelim_index]
+        if self.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE) and self._prelim_index < len(self.play_order):
+            return self.spots[self.play_order[self._prelim_index]]
         return None
 
     def insurance_prompt_kind(self, spot: Spot) -> str:
@@ -303,8 +346,8 @@ class Round:
         return outcome[0] if outcome else None
 
     def _advance_early_surrender_cursor(self) -> None:
-        while self._prelim_index < len(self.spots):
-            hand = self.spots[self._prelim_index].hands[0]
+        while self._prelim_index < len(self.play_order):
+            hand = self.spots[self.play_order[self._prelim_index]].hands[0]
             # A player blackjack is never offered early surrender -- it's
             # only ever eligible for even money, offered next in the
             # INSURANCE phase.
@@ -320,8 +363,8 @@ class Round:
             self._resolve_peek()
 
     def _advance_insurance_cursor(self) -> None:
-        while self._prelim_index < len(self.spots):
-            if self.spots[self._prelim_index].hands[0].surrendered:
+        while self._prelim_index < len(self.play_order):
+            if self.spots[self.play_order[self._prelim_index]].hands[0].surrendered:
                 self._prelim_index += 1
                 continue
             return
@@ -330,7 +373,7 @@ class Round:
     def respond_early_surrender(self, accept: bool) -> None:
         if self.phase != Phase.EARLY_SURRENDER:
             return
-        spot = self.spots[self._prelim_index]
+        spot = self.spots[self.play_order[self._prelim_index]]
         if accept:
             spot.hands[0].surrendered = True
         self._prelim_index += 1
@@ -339,11 +382,16 @@ class Round:
     def respond_insurance(self, accept: bool) -> None:
         if self.phase != Phase.INSURANCE:
             return
-        spot = self.spots[self._prelim_index]
+        spot = self.spots[self.play_order[self._prelim_index]]
         hand = spot.hands[0]
         if accept:
             if hand.is_blackjack:
+                # Even money is an immediate, self-contained settlement --
+                # it doesn't wait on the dealer's hole card (that's the
+                # whole point of taking it) or the rest of the round.
                 hand.even_money_taken = True
+                payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+                self._record_settlement(spot, hand, outcome, payout)
             else:
                 wager = hand.bet / 2
                 if self.session.can_afford(wager):
@@ -360,8 +408,12 @@ class Round:
             self._settle_round()
             self.phase = Phase.SETTLED
         else:
+            # Dealer confirmed clean -- any player blackjack that didn't
+            # take even money is now a guaranteed win, so settle it right
+            # away rather than making it wait on the rest of the round.
+            self._settle_immediate_blackjacks()
             self.phase = Phase.PLAYER_TURN
-            self._current_spot_index = 0
+            self._play_cursor = 0
             self._current_hand_index = 0
             self._advance_player_cursor()
 
@@ -370,9 +422,9 @@ class Round:
     # ------------------------------------------------------------------
 
     def current_player_hand(self) -> Optional[Tuple[Spot, Hand]]:
-        if self.phase != Phase.PLAYER_TURN or self._current_spot_index >= len(self.spots):
+        if self.phase != Phase.PLAYER_TURN or self._play_cursor >= len(self.play_order):
             return None
-        spot = self.spots[self._current_spot_index]
+        spot = self.spots[self.play_order[self._play_cursor]]
         if self._current_hand_index >= len(spot.hands):
             return None
         return spot, spot.hands[self._current_hand_index]
@@ -525,14 +577,14 @@ class Round:
         self.session.stats.record_split()
 
     def _advance_player_cursor(self) -> None:
-        while self._current_spot_index < len(self.spots):
-            spot = self.spots[self._current_spot_index]
+        while self._play_cursor < len(self.play_order):
+            spot = self.spots[self.play_order[self._play_cursor]]
             while self._current_hand_index < len(spot.hands):
                 hand = spot.hands[self._current_hand_index]
                 if self._hand_needs_play(spot, hand):
                     return
                 self._current_hand_index += 1
-            self._current_spot_index += 1
+            self._play_cursor += 1
             self._current_hand_index = 0
         self._begin_dealer_turn_or_settle()
 
@@ -617,6 +669,29 @@ class Round:
             return 0.0, "dealer_win"
         return hand.bet, "push"
 
+    def _record_settlement(self, spot: Spot, hand: Hand, outcome: str, payout: float) -> None:
+        """Credit a single hand's payout and record it as a HandResult right
+        now, independent of the rest of the round -- used both by the
+        eventual full-round settlement below and by the earlier immediate
+        settlements (a lone player blackjack, an accepted even money)."""
+        hand.settled = True
+        self.session.adjust_bankroll(payout)
+        self.session.stats.record_hand_outcome(outcome, hand.bet, payout)
+        if hand.is_blackjack:
+            self.session.stats.record_player_blackjack()
+        self.results.append(HandResult(spot.index, hand, outcome, payout))
+
+    def _settle_immediate_blackjacks(self) -> None:
+        """Settle every spot's still-unsettled natural blackjack the moment
+        it's known the dealer doesn't (or can't) have one of their own --
+        called right after a clean peek, or immediately at deal time when
+        no peek was even possible (a 2-9 up card)."""
+        for spot in self.spots:
+            hand = spot.hands[0]
+            if hand.is_blackjack and not hand.settled:
+                payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+                self._record_settlement(spot, hand, outcome, payout)
+
     def _settle_side_bets(self) -> List[SideBetResult]:
         results: List[SideBetResult] = []
         evaluators = {
@@ -667,15 +742,16 @@ class Round:
         if dealer_bust and len(self.dealer_hand.cards) >= 8:
             self.session.stats.record_dealer_bust_8plus()
 
-        results: List[HandResult] = []
         for spot in self.spots:
             for hand in spot.hands:
+                if hand.settled:
+                    # Already credited and recorded earlier this round (a
+                    # lone player blackjack once the dealer was confirmed
+                    # clean, or an accepted even money offer) -- settling
+                    # it again here would double-pay it.
+                    continue
                 payout, outcome = self._settle_hand(hand, dealer_bust, dealer_value, dealer_bj)
-                self.session.adjust_bankroll(payout)
-                self.session.stats.record_hand_outcome(outcome, hand.bet, payout)
-                if hand.is_blackjack:
-                    self.session.stats.record_player_blackjack()
-                results.append(HandResult(spot.index, hand, outcome, payout))
+                self._record_settlement(spot, hand, outcome, payout)
 
             if spot.insurance_wager > 0:
                 insurance_win = spot.insurance_wager * 3 if dealer_bj else 0.0
@@ -683,7 +759,6 @@ class Round:
                     self.session.adjust_bankroll(insurance_win)
                 self.session.stats.record_side_bet(spot.insurance_wager, insurance_win)
 
-        self.results = results
         self.side_bet_results = self._settle_side_bets()
 
     def summary_lines(self) -> List[str]:
