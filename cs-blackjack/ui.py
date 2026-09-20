@@ -38,6 +38,7 @@ CARD_BLOCK_HEIGHT = CARD_H
 # ---- Table geometry ----
 MARGIN_COLS = 6  # ~0.5in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
 NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, regardless of `hands`
+DIVIDER_COLS = NUM_SPOT_COLUMNS - 1  # one reserved column per gap, for the ♦ divider between spots
 
 # SPOT_SCREEN_ORDER (spot index -> its on-screen column slot) now lives in
 # engine.py, imported above -- it's also the basis of the dealing/play/
@@ -105,7 +106,7 @@ STATS_ROW_MIN_WIDTH = (
     (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4 + STATS_INNER_GAP * 2 + STATS_TABLE_GAP
 )
 MIN_COLS = max(
-    2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS,
+    2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS + DIVIDER_COLS,
     2 * MARGIN_COLS + STATS_ROW_MIN_WIDTH,
 )
 
@@ -582,10 +583,12 @@ def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[s
     Most outcomes get the standard "Win/Lose/Push/Surrendered -
     $X returned" treatment (dark grass green). A handful of specific
     outcomes read as a different *kind* of event and get their own color:
-    an immediate player blackjack (yellow on jet black), any hand beaten
-    by a confirmed dealer blackjack (red on jet black), a player bust
+    an immediate player blackjack (yellow on dark purple), any hand beaten
+    by a confirmed dealer blackjack (red on dark purple), a player bust
     (white on deep red), and an accepted even money offer -- which is
-    still the standard green, per spec, just its own distinct label.
+    still the standard green, per spec, just its own distinct label. A
+    doubled hand's win/loss also keeps the standard green, just labeled
+    "Double Down Win"/"Double Down Loss" instead of the plain Win/Lose.
 
     A single hand shows its full result word; a split spot's multiple
     hands instead tally letters, e.g. "1W 1L" (W/L/P/S, in that fixed
@@ -614,6 +617,10 @@ def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[s
             text, attr = "BUST", curses.color_pair(BUST_PAIR) | curses.A_BOLD
         elif round_.dealer_has_blackjack and r.outcome == "dealer_win":
             text, attr = "DEALER BLACKJACK", dealer_bj_attr
+        elif hand.doubled and r.outcome == "player_win":
+            text, attr = "Double Down Win", standard_attr
+        elif hand.doubled and r.outcome == "dealer_win":
+            text, attr = "Double Down Loss", standard_attr
         else:
             text, attr = OUTCOME_LABELS[r.outcome], standard_attr
     else:
@@ -661,10 +668,12 @@ def _sidebet_banner_attr(key: str, label: str) -> int:
 
 
 def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, str, float]]:
-    """[(key, label, win_amount), ...] for this spot's side bets that
-    actually won this round, in PP/S21/BUST order."""
-    if round_.phase != Phase.SETTLED:
-        return []
+    """[(key, label, win_amount), ...] for this spot's Power Poker/Star21/
+    Buster wins settled so far this round, in PP/S21/BUST order. Each
+    settles at a different point (Power Poker and Star21 immediately
+    after the deal, Buster only once the dealer's hand is fully played
+    out), so this list can grow over the course of the round rather than
+    only appearing once everything is done."""
     wins: List[Tuple[str, str, float]] = []
     for key in _SIDEBET_KEYS_ORDERED:
         display_name = SIDE_BET_LABELS[key]
@@ -674,52 +683,53 @@ def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, str, float]
     return wins
 
 
-def _sidebet_live_wins(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
-    """(text, attr) frames for win labels already confirmed for this spot
-    before settlement. Power Poker and Star21 are knowable as soon as the
-    spot's first two cards and the dealer's up card are dealt, so they
-    can be confirmed on screen right away and held there through the
-    player's whole turn. Dealer Buster has no such preview -- it depends
-    on the dealer's full hand, which isn't drawn until after the player
-    is done -- so it never appears here, only once settled."""
-    results: List[Tuple[str, int]] = []
-    for key in ("power_poker", "star21"):
-        wager = spot.side_bet_wagers.get(key, 0.0)
-        if wager <= 0:
-            continue
-        label = round_.side_bet_preview_label(spot, key)
-        if label:
-            results.append((_display_label(label), _sidebet_banner_attr(key, label)))
-    return results
+def _spot_insurance_result(round_: Round, spot: Spot):
+    """This spot's settled Insurance SideBetResult, if it placed one --
+    None before the dealer's hole card is peeked, since Insurance can't
+    resolve (win OR lose) any earlier than that."""
+    for sb in round_.side_bet_results:
+        if sb.spot_index == spot.index and sb.name == "Insurance":
+            return sb
+    return None
 
 
 def _sidebet_banner_lines(round_: Optional[Round], spot: Spot) -> Tuple[Tuple[str, int], Tuple[str, int]]:
-    """The side-bet banner's two rows. Row 1 cycles the winning label(s)
-    on a wall clock (same flicker whether it's a live preview before
-    settlement or the final result after), one at a time, repeating --
-    e.g. "FLUSH" -> "UNSUITED 21" -> "FLUSH" -> ... -- driven by _main's
-    idle-timeout redraws, not a counter, so it keeps animating even with
-    no keypress. Row 2 is the static combined total once settled ("Side
-    Bets Total: $X returned", dark gray); it stays blank before that,
-    since Dealer Buster's contribution isn't knowable until the dealer's
-    hand resolves, so any earlier total would be incomplete."""
+    """The side-bet banner's two rows, built as a list of paired frames
+    that cycle together on a wall clock, one frame at a time, repeating --
+    driven by _main's idle-timeout redraws, not a counter, so it keeps
+    animating even with no keypress. Each Power Poker/Star21/Buster win
+    pairs its own label (row 1) with the combined "Side Bets Total" (row
+    2, dark gray, everything settled so far including Insurance's own
+    contribution). Insurance gets its own frame instead -- "INSURANCE"
+    (row 1) paired with its own return (row 2), both beige -- shown
+    whether it won or lost, since taking insurance is worth confirming
+    either way, not just when it pays off.
+
+    Power Poker, Star21, and Insurance each settle immediately (right
+    after the deal, and right after the dealer's peek, respectively), so
+    their frames can appear well before the round is fully settled;
+    Dealer Buster can't resolve until the dealer's hand is fully played
+    out, so its frame only ever shows up once everything else is done."""
     empty = ("", _DEFAULT_BANNER_ATTR)
     if round_ is None:
         return empty, empty
-    if round_.phase == Phase.SETTLED:
-        wins = _spot_sidebet_wins(round_, spot)
-        if not wins:
-            return empty, empty
-        labels = [(_display_label(label), _sidebet_banner_attr(key, label)) for key, label, _ in wins]
-        frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(labels)
-        total = sum(amount for _, _, amount in wins)
-        total_line = (f"Side Bets Total: ${total:,.2f} returned", curses.color_pair(SIDEBET_TOTAL_PAIR) | curses.A_BOLD)
-        return labels[frame], total_line
-    wins = _sidebet_live_wins(round_, spot)
-    if not wins:
+
+    wins = _spot_sidebet_wins(round_, spot)
+    insurance = _spot_insurance_result(round_, spot)
+    total = sum(amount for _, _, amount in wins) + (insurance.win_amount if insurance else 0.0)
+    gray_line = (f"Side Bets Total: ${total:,.2f} returned", curses.color_pair(SIDEBET_TOTAL_PAIR) | curses.A_BOLD)
+
+    frames: List[Tuple[Tuple[str, int], Tuple[str, int]]] = [
+        ((_display_label(label), _sidebet_banner_attr(key, label)), gray_line) for key, label, _ in wins
+    ]
+    if insurance is not None:
+        beige_attr = curses.color_pair(INSURANCE_PAIR) | curses.A_BOLD
+        frames.append((("INSURANCE", beige_attr), (f"${insurance.win_amount:,.2f} returned", beige_attr)))
+
+    if not frames:
         return empty, empty
-    frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(wins)
-    return wins[frame], empty
+    frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(frames)
+    return frames[frame]
 
 
 def _active_hand_index(spot: Spot, round_: Round) -> int:
@@ -887,8 +897,13 @@ def render(
     # bottom), so it never centers over top of it.
     y_origin = max(1, (max_y - CONTENT_HEIGHT) // 2)
     right_edge = left_margin + usable_width
-    col_width = usable_width // NUM_SPOT_COLUMNS
-    col_x = [left_margin + i * col_width for i in range(NUM_SPOT_COLUMNS)]
+    # One column is reserved between each pair of adjacent spots for a
+    # decorative ♦ divider (see divider_x below); any leftover width from
+    # the integer division falls unused at the far right of the screen,
+    # past the last spot column, rather than skewing any one column wider.
+    col_width = max(1, (usable_width - DIVIDER_COLS) // NUM_SPOT_COLUMNS)
+    col_x = [left_margin + i * (col_width + 1) for i in range(NUM_SPOT_COLUMNS)]
+    divider_x = [col_x[i] + col_width for i in range(NUM_SPOT_COLUMNS - 1)]
 
     cell_rects: CellRects = {}
 
@@ -1039,6 +1054,15 @@ def render(
                 _draw_filled_banner(win, banner_row1_y, cx, col_width, banner1_text, banner1_attr)
             if banner2_text:
                 _draw_filled_banner(win, banner_row2_y, cx, col_width, banner2_text, banner2_attr)
+
+    # ---- Decorative ♦ dividers between the 3 spot columns, one column
+    # wide apiece (see divider_x above), spanning just the player/wager
+    # block -- not the dealer's own row, which is centered across the
+    # whole width rather than per column, so a full-height divider would
+    # cut through it. ----
+    for dx in divider_x:
+        for dy in range(chips_y, banner_row2_y + 1):
+            _safe_addstr(win, dy, dx, "♦", curses.color_pair(1))
 
     # ---- Hint / message line (shows the active message in place of the
     # contextual hint when there is one) ----
@@ -1245,9 +1269,10 @@ SIDEBET_TOTAL_PAIR = 18  # "Side Bets Total" summary frame: dark gray
 # event the player should notice at a glance, so they get their own colors
 # entirely distinct from STANDARD and from each other.
 STANDARD_SETTLEMENT_PAIR = 20  # standard win/lose/push/surrender/even-money: dark grass green
-PLAYER_BJ_PAIR = 21  # an immediate, unbeaten player blackjack: yellow on jet black
-DEALER_BJ_PAIR = 22  # any hand beaten by a confirmed dealer blackjack: red on jet black
+PLAYER_BJ_PAIR = 21  # an immediate, unbeaten player blackjack: yellow on dark purple
+DEALER_BJ_PAIR = 22  # any hand beaten by a confirmed dealer blackjack: red on dark purple
 BUST_PAIR = 23  # a player bust: white on deep red
+INSURANCE_PAIR = 24  # a settled Insurance side bet, win or lose: black on beige
 
 
 def init_colors() -> None:
@@ -1315,16 +1340,27 @@ def init_colors() -> None:
     curses.init_pair(STANDARD_SETTLEMENT_PAIR, curses.COLOR_WHITE, dark_green)
 
     # An immediate player blackjack, and a hand beaten by a confirmed
-    # dealer blackjack -- both share a jet-black background (distinct from
-    # every other banner on screen) with their own accent color on top.
-    curses.init_pair(PLAYER_BJ_PAIR, curses.COLOR_YELLOW, curses.COLOR_BLACK)
-    curses.init_pair(DEALER_BJ_PAIR, curses.COLOR_RED, curses.COLOR_BLACK)
+    # dealer blackjack -- both share a dark purple background (distinct
+    # from every other banner on screen) with their own accent color on
+    # top. True dark purple needs the extended palette; on a basic
+    # 8-color terminal, magenta is the closest available approximation.
+    dark_purple = 54 if curses.COLORS >= 256 else curses.COLOR_MAGENTA
+    curses.init_pair(PLAYER_BJ_PAIR, curses.COLOR_YELLOW, dark_purple)
+    curses.init_pair(DEALER_BJ_PAIR, curses.COLOR_RED, dark_purple)
 
     # Player bust: a deep red, distinctly darker than the table-status
     # banner's own red (pair 5) so the two "red" banners don't blur
     # together. Falls back to plain red on a basic 8-color terminal.
     deep_red = 88 if curses.COLORS >= 256 else curses.COLOR_RED
     curses.init_pair(BUST_PAIR, curses.COLOR_WHITE, deep_red)
+
+    # Insurance: a beige background with black text, distinct from every
+    # other side-bet color -- shown whether it wins or loses, so it reads
+    # as its own neutral "this is what insurance did" notice rather than
+    # borrowing a win/loss color. True beige needs the extended palette;
+    # on a basic 8-color terminal, white is the closest approximation.
+    beige = 230 if curses.COLORS >= 256 else curses.COLOR_WHITE
+    curses.init_pair(INSURANCE_PAIR, curses.COLOR_BLACK, beige)
 
 
 DEAL_FRAME_MS = 250  # pause between each card of the initial deal animation
@@ -1539,6 +1575,7 @@ def _main(stdscr) -> None:
                     msg = _after_engine_change(round_, session, stdscr)
                     if msg is not None:
                         message = msg
+                    curses.flushinp()  # discard any keys queued up during the response/animation above
                     continue
 
             elif round_ is not None and round_.phase == Phase.INSURANCE and buffer == "":
@@ -1555,6 +1592,7 @@ def _main(stdscr) -> None:
                     msg = _after_engine_change(round_, session, stdscr)
                     if msg is not None:
                         message = msg
+                    curses.flushinp()  # discard any keys queued up during the response/animation above
                     continue
 
             elif round_ is not None and round_.phase == Phase.PLAYER_TURN and buffer == "":
@@ -1578,6 +1616,7 @@ def _main(stdscr) -> None:
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg
+                        curses.flushinp()  # discard any keys queued up during the action/animation above
                     continue
 
             elif round_ is not None and round_.phase == Phase.SETTLED and buffer == "" and ch in RETURN_KEYS:
@@ -1587,6 +1626,12 @@ def _main(stdscr) -> None:
                     message = "New shoe shuffled in. Ready for the next round."
                 else:
                     message = ""
+                # Discard any further RETURNs/clicks queued up while the
+                # settlement banners were cycling -- otherwise a player who
+                # multi-pressed RETURN to be sure can end up instantly
+                # re-dealing (or even acting on) the *next* round from
+                # keys that were only ever meant for this one.
+                curses.flushinp()
                 continue
 
             elif round_ is None:
@@ -1642,10 +1687,12 @@ def _main(stdscr) -> None:
                     else:
                         round_ = new_round
                         message = ""
+                        curses.flushinp()  # a queued key shouldn't fire mid-animation as an early action
                         _animate_deal(stdscr, session, round_)
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg
+                        curses.flushinp()  # ...or land as a snap decision the instant the deal finishes
                     continue
                 if input_focus != "cli" and 32 <= ch < 127:
                     # Not focused on the CLI -- typing a command needs a

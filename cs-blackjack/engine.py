@@ -301,6 +301,14 @@ class Round:
         self._prelim_index = 0
         self._dealer_draw_iter: Optional[Iterator[Hand]] = None
 
+        # Power Poker and Star21 only key off each spot's first two cards
+        # plus the dealer's up card -- already fully known -- so they
+        # settle immediately here, before any early-surrender/insurance
+        # decision or player action. Dealer Buster can't resolve until the
+        # dealer's hand is fully played out, so it waits and settles
+        # alongside the final main-wager settlement instead (_settle_buster).
+        self._settle_pp_s21()
+
         if self.dealer_up.rank in PEEK_RANKS:
             if self.rules.surrender_early and self.dealer_up.rank == "A":
                 self.phase = Phase.EARLY_SURRENDER
@@ -331,19 +339,6 @@ class Round:
     def insurance_prompt_kind(self, spot: Spot) -> str:
         """'even_money' or 'insurance', for the UI to pick prompt wording."""
         return "even_money" if spot.hands[0].is_blackjack else "insurance"
-
-    def side_bet_preview_label(self, spot: Spot, key: str) -> Optional[str]:
-        """Best-effort outcome label, usable as soon as the spot's first two
-        cards are dealt -- Power Poker and Star21 only key off those two
-        cards plus the dealer's up card, so (unlike Dealer Buster) their
-        outcome is knowable well before settlement."""
-        if key == "power_poker":
-            outcome = evaluate_power_poker(spot.side_bet_snapshot, self.dealer_up)
-        elif key == "star21":
-            outcome = evaluate_star21(spot.side_bet_snapshot, self.dealer_up)
-        else:
-            return None
-        return outcome[0] if outcome else None
 
     def _advance_early_surrender_cursor(self) -> None:
         while self._prelim_index < len(self.play_order):
@@ -402,6 +397,10 @@ class Round:
 
     def _resolve_peek(self) -> None:
         self.peeked = True
+        # Insurance settles the instant the hole card is peeked -- 2:1 if
+        # the dealer has blackjack, forfeited otherwise -- independent of
+        # whatever the rest of the round does next.
+        self._settle_insurance()
         if self.dealer_hand.is_blackjack:
             self.dealer_has_blackjack = True
             self.dealer_revealed = True
@@ -534,7 +533,12 @@ class Round:
 
         if action == "hit":
             hand.add_card(self.session.shoe.draw())
-            if hand.best_value == 21:
+            if hand.is_bust:
+                # Settle a bust the instant it happens -- the wager is
+                # already lost, no need to wait for the rest of the round.
+                payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+                self._record_settlement(spot, hand, outcome, payout)
+            elif hand.best_value == 21:
                 hand.stood = True
         elif action == "stand":
             hand.stood = True
@@ -544,12 +548,21 @@ class Round:
             hand.doubled = True
             hand.add_card(self.session.shoe.draw())
             if self.rules.double_facedown:
+                # The card (and so a possible bust) stays hidden until the
+                # REVEAL phase -- settling now would leak it early.
                 hand.double_hidden = True
+            elif hand.is_bust:
+                payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+                self._record_settlement(spot, hand, outcome, payout)
             self.session.stats.record_double()
         elif action == "split":
             self._do_split(spot, hand)
         elif action == "surrender":
+            # Surrender settles immediately too, like a real table --
+            # half the wager comes back right away, not at round's end.
             hand.surrendered = True
+            payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+            self._record_settlement(spot, hand, outcome, payout)
 
         self._advance_player_cursor()
         return None
@@ -692,8 +705,11 @@ class Round:
                 payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
                 self._record_settlement(spot, hand, outcome, payout)
 
-    def _settle_side_bets(self) -> List[SideBetResult]:
-        results: List[SideBetResult] = []
+    def _settle_pp_s21(self) -> None:
+        """Power Poker and Star21 settle immediately after the deal -- both
+        only key off the spot's first two cards and the dealer's up card,
+        already fully known the moment dealing finishes, well before any
+        early-surrender/insurance decision or player action."""
         evaluators = {
             "power_poker": (SIDE_BET_LABELS["power_poker"], evaluate_power_poker),
             "star21": (SIDE_BET_LABELS["star21"], evaluate_star21),
@@ -719,18 +735,40 @@ class Round:
                 if win:
                     self.session.adjust_bankroll(win)
                 self.session.stats.record_side_bet(wager, win)
-                results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
+                self.side_bet_results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
+    def _settle_insurance(self) -> None:
+        """Insurance settles the instant the dealer's hole card is peeked
+        -- paid 2:1 (a 3x return) if the dealer has blackjack, forfeited
+        otherwise -- independent of the main hand(s) and of Dealer Buster."""
+        dealer_bj = self.dealer_hand.is_blackjack
+        for spot in self.spots:
+            wager = spot.insurance_wager
+            if wager <= 0:
+                continue
+            win = wager * 3 if dealer_bj else 0.0
+            if win:
+                self.session.adjust_bankroll(win)
+            self.session.stats.record_side_bet(wager, win)
+            self.side_bet_results.append(SideBetResult(spot.index, "Insurance", wager, None, 2.0, win))
+
+    def _settle_buster(self) -> None:
+        """Dealer Buster can't resolve until the dealer's hand is fully
+        played out, so -- unlike Power Poker and Star21 -- it settles
+        alongside the final main-wager settlement, not right after the deal."""
+        for spot in self.spots:
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
-            if buster_wager > 0:
-                outcome = evaluate_dealer_buster(self.dealer_hand)
-                label, multiplier = outcome if outcome else (None, 0.0)
-                win = buster_wager * (1 + multiplier) if outcome else 0.0
-                if win:
-                    self.session.adjust_bankroll(win)
-                self.session.stats.record_side_bet(buster_wager, win)
-                results.append(SideBetResult(spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win))
-        return results
+            if buster_wager <= 0:
+                continue
+            outcome = evaluate_dealer_buster(self.dealer_hand)
+            label, multiplier = outcome if outcome else (None, 0.0)
+            win = buster_wager * (1 + multiplier) if outcome else 0.0
+            if win:
+                self.session.adjust_bankroll(win)
+            self.session.stats.record_side_bet(buster_wager, win)
+            self.side_bet_results.append(
+                SideBetResult(spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win)
+            )
 
     def _settle_round(self) -> None:
         dealer_bust = self.dealer_hand.is_bust
@@ -753,13 +791,7 @@ class Round:
                 payout, outcome = self._settle_hand(hand, dealer_bust, dealer_value, dealer_bj)
                 self._record_settlement(spot, hand, outcome, payout)
 
-            if spot.insurance_wager > 0:
-                insurance_win = spot.insurance_wager * 3 if dealer_bj else 0.0
-                if insurance_win:
-                    self.session.adjust_bankroll(insurance_win)
-                self.session.stats.record_side_bet(spot.insurance_wager, insurance_win)
-
-        self.side_bet_results = self._settle_side_bets()
+        self._settle_buster()
 
     def summary_lines(self) -> List[str]:
         lines = []
