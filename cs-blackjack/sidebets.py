@@ -76,8 +76,8 @@ def evaluate_dealer_buster(dealer_hand: Hand) -> Result:
         return None
     n = len(dealer_hand.cards)
     if n >= 8:
-        return ("8+ Cards", 250)
+        return ("8+ Card Bust", 250)
     payout = _BUSTER_PAYTABLE.get(n)
     if payout is None:
         return None
-    return (f"{n} Cards", payout)
+    return (f"{n} Card Bust", payout)

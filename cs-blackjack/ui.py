@@ -7,7 +7,17 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from . import commands, persist
 from .cards import Card
-from .engine import OUTCOME_LABELS, SIDE_BET_LABELS, GameSession, Phase, Round, Spot, try_start_round
+from .engine import (
+    OUTCOME_LABELS,
+    SIDE_BET_LABELS,
+    SPOT_SCREEN_ORDER,
+    GameSession,
+    Phase,
+    Round,
+    Spot,
+    initial_deal_sequence,
+    try_start_round,
+)
 from .hand import Hand
 
 # ---- Card art / hand-stacking geometry ----
@@ -29,13 +39,9 @@ CARD_BLOCK_HEIGHT = CARD_H
 MARGIN_COLS = 6  # ~0.5in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
 NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, regardless of `hands`
 
-# Spot index -> its on-screen column slot (0=left, 1=middle, 2=right). Spot
-# 0 ("Hand #1") sits front-and-center under the dealer since it's the one
-# spot that's always in play; spots 1 and 2 ("Hand #2"/"#3") fill outward
-# to the left and right as more hands are added. This mapping is its own
-# inverse (slot -> spot uses the same array), which is what lets the
-# left/right arrow-key wager-grid navigation below just run it both ways.
-SPOT_SCREEN_ORDER = [1, 0, 2]
+# SPOT_SCREEN_ORDER (spot index -> its on-screen column slot) now lives in
+# engine.py, imported above -- it's also the basis of the dealing/play/
+# prelim-prompt order there, not just this module's own screen layout.
 
 # ---- Wager cell boxes ----
 MAIN_WAGER_BOX_W = 12
@@ -94,7 +100,10 @@ STATS_BLOCK_ROWS = max(STATS_MAX_ROWS, PAYOUT_MAX_ROWS)  # shared row budget for
 # would ever collide).
 STATS_MIN_COL_W = 25  # per stats sub-column (4 sub-columns: session x2, lifetime x2)
 STATS_INNER_GAP = 4  # buffer between Session's own 2 sub-columns, and between Lifetime's own 2
-STATS_ROW_MIN_WIDTH = (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4 + STATS_INNER_GAP * 2
+STATS_TABLE_GAP = 1  # extra buffer between Session's table and Lifetime's, beyond their own headers
+STATS_ROW_MIN_WIDTH = (
+    (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4 + STATS_INNER_GAP * 2 + STATS_TABLE_GAP
+)
 MIN_COLS = max(
     2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS,
     2 * MARGIN_COLS + STATS_ROW_MIN_WIDTH,
@@ -368,12 +377,11 @@ def hand_value_label(hand: Hand, hide_hole: bool = False, resolved: bool = False
 
 
 def hand_status_text(hand: Hand, spot: Spot, round_: Round) -> str:
-    """Text for the line above a hand's cards -- interactive prompts, and
-    BUST as immediate feedback the moment it happens. The hand's actual
-    result (Win/Lose/Push/Surrendered/BLACKJACK) is NOT shown here; that
-    now lives only in the spot's settlement banner below the wager box,
-    so a hand's outcome is never announced twice in two different spots
-    on screen."""
+    """Text for the line above a hand's cards -- interactive prompts only.
+    The hand's actual result (Win/Lose/Push/Surrendered/BLACKJACK/BUST) is
+    NOT shown here; that lives only in the spot's settlement banner below
+    the wager box, so a hand's outcome is never announced twice in two
+    different spots on screen."""
     if round_ is None:
         return ""
     if round_.phase == Phase.EARLY_SURRENDER and round_.current_prelim_spot() is spot:
@@ -381,8 +389,6 @@ def hand_status_text(hand: Hand, spot: Spot, round_: Round) -> str:
     if round_.phase == Phase.INSURANCE and round_.current_prelim_spot() is spot:
         kind = round_.insurance_prompt_kind(spot)
         return "Even Money?" if kind == "even_money" else "Insurance?"
-    if hand.is_bust:
-        return "BUST"
     return ""
 
 
@@ -495,12 +501,16 @@ def _draw_wager_cell(
 
 
 def _draw_colored_box(win, y: int, x: int, width: int, attr: int) -> None:
-    """Like _draw_box, but the whole cell -- border and interior -- is
-    filled with a color pair instead of left on the default background,
-    for a side bet's themed wager cell."""
-    _safe_addstr(win, y, x, "┌" + "─" * (width - 2) + "┐", attr)
-    _safe_addstr(win, y + 1, x, " " * width, attr)
-    _safe_addstr(win, y + 2, x, "└" + "─" * (width - 2) + "┘", attr)
+    """Like _draw_box, but the cell's INTERIOR -- never its border -- is
+    filled with a color pair, for a side bet's themed wager cell. The
+    frame itself is drawn in the default terminal color so the color
+    block reads as strictly contained inside the box, with no bleed onto
+    its own border."""
+    _safe_addstr(win, y, x, "┌" + "─" * (width - 2) + "┐")
+    _safe_addstr(win, y + 1, x, "│")
+    _safe_addstr(win, y + 1, x + 1, " " * (width - 2), attr)
+    _safe_addstr(win, y + 1, x + width - 1, "│")
+    _safe_addstr(win, y + 2, x, "└" + "─" * (width - 2) + "┘")
 
 
 # Each side bet's wager cell is permanently tinted in its own color, the
@@ -561,31 +571,60 @@ def _draw_sidebet_amounts(
 _OUTCOME_LETTERS = {"player_win": "W", "dealer_win": "L", "push": "P", "surrender": "S"}
 
 
-def _spot_settlement_text(round_: Optional[Round], spot_index: int) -> str:
-    """Main-bet settlement banner text: the hand's result, then the total
-    returned across all of this spot's hands -- "Win – $20.00 returned",
-    or "Lose – $0.00 returned". A single hand shows its full result word,
-    with a natural blackjack called out as "BLACKJACK" instead of "Win"
-    (a split hand can never itself be a blackjack -- see Hand.is_blackjack
-    -- so this only ever applies to an unsplit hand). Multiple hands (from
-    a split) instead tally letters, e.g. "1W 1L", W/L/P/S for
-    Win/Lose/Push/Surrendered, in that fixed order."""
-    if round_ is None or round_.phase != Phase.SETTLED:
-        return ""
+def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[str, int]:
+    """Main-bet settlement banner: (text, curses attr). Shown as soon as
+    this spot has at least one settled hand -- which can be well before
+    the whole round reaches Phase.SETTLED, since a lone player blackjack
+    or an accepted even money offer settles immediately (see engine.py's
+    _settle_immediate_blackjacks/_record_settlement), independent of
+    whatever the rest of the round is still doing.
+
+    Most outcomes get the standard "Win/Lose/Push/Surrendered -
+    $X returned" treatment (dark grass green). A handful of specific
+    outcomes read as a different *kind* of event and get their own color:
+    an immediate player blackjack (yellow on jet black), any hand beaten
+    by a confirmed dealer blackjack (red on jet black), a player bust
+    (white on deep red), and an accepted even money offer -- which is
+    still the standard green, per spec, just its own distinct label.
+
+    A single hand shows its full result word; a split spot's multiple
+    hands instead tally letters, e.g. "1W 1L" (W/L/P/S, in that fixed
+    order). A split hand can never itself be a blackjack or have taken
+    even money (see Hand.is_blackjack), so the tally case only ever needs
+    to pick between the standard color and the dealer-blackjack one --
+    that's the one event that's always true of every hand in the spot at
+    once, so a single color for the whole tally still reads unambiguously."""
+    if round_ is None:
+        return "", 0
     results = [r for r in round_.results if r.spot_index == spot_index]
     if not results:
-        return ""
+        return "", 0
     total = sum(r.payout for r in results)
+    standard_attr = curses.color_pair(STANDARD_SETTLEMENT_PAIR) | curses.A_BOLD
+    dealer_bj_attr = curses.color_pair(DEALER_BJ_PAIR) | curses.A_BOLD
+
     if len(results) == 1:
         r = results[0]
-        result_text = "BLACKJACK" if r.hand.is_blackjack else OUTCOME_LABELS[r.outcome]
+        hand = r.hand
+        if hand.even_money_taken:
+            text, attr = "EVEN MONEY", standard_attr
+        elif hand.is_blackjack and r.outcome == "player_win":
+            text, attr = "BLACKJACK", curses.color_pair(PLAYER_BJ_PAIR) | curses.A_BOLD
+        elif hand.is_bust:
+            text, attr = "BUST", curses.color_pair(BUST_PAIR) | curses.A_BOLD
+        elif round_.dealer_has_blackjack and r.outcome == "dealer_win":
+            text, attr = "DEALER BLACKJACK", dealer_bj_attr
+        else:
+            text, attr = OUTCOME_LABELS[r.outcome], standard_attr
     else:
         counts: Dict[str, int] = {}
         for r in results:
             letter = _OUTCOME_LETTERS[r.outcome]
             counts[letter] = counts.get(letter, 0) + 1
-        result_text = " ".join(f"{counts[letter]}{letter}" for letter in ("W", "L", "P", "S") if letter in counts)
-    return f"{result_text} – ${total:,.2f} returned"
+        text = " ".join(f"{counts[letter]}{letter}" for letter in ("W", "L", "P", "S") if letter in counts)
+        attr = dealer_bj_attr if round_.dealer_has_blackjack else standard_attr
+
+    return f"{text} – ${total:,.2f} returned", attr
 
 
 _SIDEBET_KEYS_ORDERED = ("power_poker", "star21", "dealer_buster")
@@ -711,6 +750,7 @@ def _draw_player_spot(
     spot: Spot,
     round_: Round,
     active: Optional[Tuple[Spot, Hand]],
+    deal_reveal: Optional[int] = None,
 ) -> None:
     """Draws a non-split-aces spot: any earlier completed split hands'
     values collapse to a compact chips row above the cards (unchanged
@@ -718,7 +758,19 @@ def _draw_player_spot(
     which sits between its cards and the wager box below -- cards, the
     live value, and the status line all share the column's own center,
     since the (separate, above) chips row no longer competes for that
-    same horizontal space the way a single combined row once did."""
+    same horizontal space the way a single combined row once did.
+
+    deal_reveal, when set (only during the initial deal animation -- no
+    split can have happened yet), draws just the spot's cards, capped to
+    however many of its first two have been "dealt" so far on screen;
+    status/value/chips text -- which would spoil or misdescribe a
+    still-incomplete hand -- is skipped entirely."""
+    if deal_reveal is not None:
+        hand = spot.hands[0]
+        hand_x = cx + max(0, (col_width - _card_block_width(hand)) // 2)
+        draw_hand(win, cards_y, hand_x, hand, max_cards=deal_reveal)
+        return
+
     active_index = _active_hand_index(spot, round_)
     if active_index > 0:
         chips_text = "   ".join(
@@ -779,6 +831,22 @@ def _draw_split_ace_hands(
         _draw_overflow_chips(win, overflow_y, hand_x, CARD_ROW_WIDTH, hand, hide_last=hand.double_hidden)
 
 
+def _deal_reveal_counts(round_: Round, progress: int) -> Tuple[Dict[int, int], int]:
+    """From how many steps of the round's initial deal sequence (see
+    engine.initial_deal_sequence) have played so far, how many of each
+    spot's -- and the dealer's -- first two cards should already be
+    visible on screen."""
+    seq = initial_deal_sequence(round_.play_order)
+    spot_counts = {spot.index: 0 for spot in round_.spots}
+    dealer_count = 0
+    for target in seq[:progress]:
+        if target is None:
+            dealer_count += 1
+        else:
+            spot_counts[target] += 1
+    return spot_counts, dealer_count
+
+
 def render(
     stdscr,
     session: GameSession,
@@ -789,11 +857,24 @@ def render(
     bet_col: int = 0,
     bet_edit_buffer: str = "",
     input_focus: str = "wager",
+    deal_progress: Optional[int] = None,
 ) -> CellRects:
     stdscr.erase()
     win = stdscr
     betting = round_ is None
     max_y, max_x = win.getmaxyx()
+
+    # deal_progress, when set, is a step count into engine.initial_deal_
+    # sequence(round_.play_order) -- how many of the round's already-dealt
+    # initial cards should be visible on screen so far. Everything that
+    # would spoil the round's outcome (dealer status/value, settlement
+    # banners, the phase hint) stays blank while animating; only the cards
+    # themselves reveal progressively -- see _animate_deal.
+    animating = round_ is not None and deal_progress is not None
+    spot_reveal: Optional[Dict[int, int]] = None
+    dealer_reveal: Optional[int] = None
+    if animating:
+        spot_reveal, dealer_reveal = _deal_reveal_counts(round_, deal_progress)
 
     # Center the whole layout vertically in whatever room the (ideally
     # full-screen) terminal offers; horizontally, a fixed margin is used
@@ -845,11 +926,11 @@ def render(
     hide_hole = round_ is not None and not round_.dealer_revealed
     dealer_hand = round_.dealer_hand if round_ else Hand()
     dealer_resolved = round_ is not None and round_.dealer_revealed and round_.phase != Phase.DEALER_TURN
-    if round_:
+    if round_ and not animating:
         d_status = dealer_status_text(round_)
         _safe_addstr(win, y, _center_x(d_status, usable_width, left_margin), d_status, curses.A_BOLD)
     y += 1
-    if round_:
+    if round_ and not animating:
         value_text = _emph(hand_value_label(dealer_hand, hide_hole=hide_hole, resolved=dealer_resolved))
         _safe_addstr(win, y, _center_x(value_text, usable_width, left_margin), value_text, curses.A_BOLD)
     y += 1
@@ -863,7 +944,14 @@ def render(
     # room to spare, unlike a player spot, so the whole hand always shows.
     dealer_x = left_margin + max(0, (usable_width - _card_block_width(dealer_hand, max_cards=None)) // 2)
     if round_:
-        draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
+        if animating:
+            # Always hidden during the deal animation, even if the round
+            # already resolved (e.g. an instant dealer blackjack) before
+            # the animation even started -- the hole card only appears at
+            # its own step in the sequence, never sooner.
+            draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=True, max_cards=dealer_reveal)
+        else:
+            draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
     y += CARD_BLOCK_HEIGHT
 
     # ---- PLAYER: collapsed chips for any already-completed split hands
@@ -907,7 +995,15 @@ def render(
 
         if in_play:
             spot = round_.spots[i]
-            if spot.hands and spot.hands[0].is_split_aces:
+            if animating:
+                # No split can have happened yet this early -- every spot
+                # is still its single, freshly-dealt hand -- so the deal
+                # animation only ever needs the plain (non-split-aces) path.
+                _draw_player_spot(
+                    win, chips_y, status_y, player_cards_base_y, player_overflow_y, active_value_y,
+                    cx, col_width, spot, round_, active, deal_reveal=spot_reveal.get(spot.index, 0),
+                )
+            elif spot.hands and spot.hands[0].is_split_aces:
                 _draw_split_ace_hands(
                     win, chips_y, status_y, player_cards_base_y, player_overflow_y,
                     cx, col_width, spot, round_, active,
@@ -931,11 +1027,11 @@ def render(
         sb_rects = _draw_sidebet_amounts(win, sidebet_box_y, sidebet_group_x, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, input_focus, dim)
         cell_rects.update(sb_rects)
 
-        if in_play:
+        if in_play and not animating:
             spot = round_.spots[i]
-            settlement_text = _spot_settlement_text(round_, i)
+            settlement_text, settlement_attr = _spot_settlement_banner(round_, i)
             if settlement_text:
-                _draw_filled_banner(win, settlement_row_y, cx, col_width, settlement_text, curses.color_pair(4) | curses.A_BOLD)
+                _draw_filled_banner(win, settlement_row_y, cx, col_width, settlement_text, settlement_attr)
             line1, line2 = _sidebet_banner_lines(round_, spot)
             banner1_text, banner1_attr = line1
             banner2_text, banner2_attr = line2
@@ -948,7 +1044,9 @@ def render(
     # contextual hint when there is one) ----
     hint_y = banner_row2_y + 1
     hint = ""
-    if round_ is None:
+    if animating:
+        hint = "Dealing..."
+    elif round_ is None:
         hint = "Arrows/mouse: move  |  digits: type amount  |  RETURN: confirm / deal"
     elif round_.phase == Phase.EARLY_SURRENDER:
         hint = "S Surrender    RETURN Continue"
@@ -1016,10 +1114,10 @@ def render(
     # themselves, which already have SESSION/LIFETIME STATS headers
     # marking that boundary.
     stats_region_w = max(1, usable_width - (stats_x0 - left_margin))
-    stats_col_w = max(1, (stats_region_w - 2 * STATS_INNER_GAP) // 4)
+    stats_col_w = max(1, (stats_region_w - 2 * STATS_INNER_GAP - STATS_TABLE_GAP) // 4)
     sess_a_x = stats_x0
     sess_b_x = sess_a_x + stats_col_w + STATS_INNER_GAP
-    life_a_x = sess_b_x + stats_col_w
+    life_a_x = sess_b_x + stats_col_w + STATS_TABLE_GAP
     life_b_x = life_a_x + stats_col_w + STATS_INNER_GAP
 
     _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
@@ -1140,6 +1238,17 @@ def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> No
 BUSTER_PAIR_BASE = 12  # 6 pairs, one per bust-length stage (3,4,5,6,7,8+ cards)
 SIDEBET_TOTAL_PAIR = 18  # "Side Bets Total" summary frame: dark gray
 
+# Main-bet settlement banner colors. STANDARD covers the ordinary outcomes
+# (Win/Lose/Push/Surrendered, and multi-hand tallies) plus Even Money, which
+# is explicitly the same color by spec -- it's just another "money settled,
+# nothing unusual" result. The other three each mark a specific kind of
+# event the player should notice at a glance, so they get their own colors
+# entirely distinct from STANDARD and from each other.
+STANDARD_SETTLEMENT_PAIR = 20  # standard win/lose/push/surrender/even-money: dark grass green
+PLAYER_BJ_PAIR = 21  # an immediate, unbeaten player blackjack: yellow on jet black
+DEALER_BJ_PAIR = 22  # any hand beaten by a confirmed dealer blackjack: red on jet black
+BUST_PAIR = 23  # a player bust: white on deep red
+
 
 def init_colors() -> None:
     curses.start_color()
@@ -1157,8 +1266,8 @@ def init_colors() -> None:
     curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_WHITE)  # new-shoe flash: black on white
     curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_MAGENTA)  # Power Poker win
     curses.init_pair(9, curses.COLOR_YELLOW, curses.COLOR_MAGENTA)  # Power Poker: Royal Flush
-    curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_GREEN)  # Star21 win
-    curses.init_pair(11, curses.COLOR_YELLOW, curses.COLOR_GREEN)  # Star21: Suited 7-7-7 Diamonds
+    curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Star21 win -- black text reads easiest on green
+    curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Star21: Suited 7-7-7 Diamonds -- same treatment
 
     # Dealer Buster: a light-to-deep orange ramp, one pair per bust length
     # (3 cards through 8+), with text color flipping from black to white
@@ -1196,6 +1305,43 @@ def init_colors() -> None:
     # stage's exact shade.
     buster_cell_bg = 216 if curses.COLORS >= 256 else curses.COLOR_YELLOW
     curses.init_pair(BUSTER_CELL_PAIR, curses.COLOR_BLACK, buster_cell_bg)
+
+    # Standard main-bet settlement: a "grass" green distinctly darker than
+    # Star21's own green (pair 10) so the two never read as the same color
+    # side by side. True dark green needs the extended palette; on a basic
+    # 8-color terminal there's no darker shade available, so it falls back
+    # to plain green (still correct, just less differentiated from Star21).
+    dark_green = 22 if curses.COLORS >= 256 else curses.COLOR_GREEN
+    curses.init_pair(STANDARD_SETTLEMENT_PAIR, curses.COLOR_WHITE, dark_green)
+
+    # An immediate player blackjack, and a hand beaten by a confirmed
+    # dealer blackjack -- both share a jet-black background (distinct from
+    # every other banner on screen) with their own accent color on top.
+    curses.init_pair(PLAYER_BJ_PAIR, curses.COLOR_YELLOW, curses.COLOR_BLACK)
+    curses.init_pair(DEALER_BJ_PAIR, curses.COLOR_RED, curses.COLOR_BLACK)
+
+    # Player bust: a deep red, distinctly darker than the table-status
+    # banner's own red (pair 5) so the two "red" banners don't blur
+    # together. Falls back to plain red on a basic 8-color terminal.
+    deep_red = 88 if curses.COLORS >= 256 else curses.COLOR_RED
+    curses.init_pair(BUST_PAIR, curses.COLOR_WHITE, deep_red)
+
+
+DEAL_FRAME_MS = 250  # pause between each card of the initial deal animation
+
+
+def _animate_deal(stdscr, session: GameSession, round_: Round) -> None:
+    """Reveals the round's already-dealt initial cards one at a time, in
+    the same traditional table order they were actually drawn from the
+    shoe in (rightmost active spot first, working left, dealer last each
+    pass -- see engine.table_order/initial_deal_sequence), instead of the
+    whole table appearing at once. The round's outcome (peek results,
+    even any instant blackjack settlement) is already fully decided by
+    this point -- this is purely a progressive reveal of it on screen."""
+    total_steps = len(initial_deal_sequence(round_.play_order))
+    for step in range(1, total_steps + 1):
+        render(stdscr, session, round_, "", "", deal_progress=step)
+        curses.napms(DEAL_FRAME_MS)
 
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
@@ -1496,6 +1642,7 @@ def _main(stdscr) -> None:
                     else:
                         round_ = new_round
                         message = ""
+                        _animate_deal(stdscr, session, round_)
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg

@@ -21,6 +21,7 @@ class Hand:
     is_insured: bool = False
     even_money_taken: bool = False
     double_hidden: bool = False  # True while a face-down double-down card hasn't been revealed yet
+    settled: bool = False  # True once this hand's payout has been credited and recorded
 
     def add_card(self, card: Card) -> None:
         self.cards.append(card)
