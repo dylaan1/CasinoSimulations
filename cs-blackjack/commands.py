@@ -24,6 +24,7 @@ HELP_LINES = [
     "  splitmax N                     Max hands from splitting non-ace pairs",
     "  tablemin N  /  tablemax N      Table wager limits",
     "  double facedown on/off         Deal the double-down card face down",
+    "  double blackjack on/off        Offer a double instead of an automatic 3:2 payout on a natural",
     "",
     "BANKROLL",
     "  bank N                         Set bankroll to N",
@@ -153,6 +154,10 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
     if head == "double" and rest and rest[0] == "facedown":
         rules.double_facedown = _parse_bool_on_off(_require(rest, 1, "double facedown on/off"))
         return f"Double-down card dealt face down: {'ON' if rules.double_facedown else 'OFF'}"
+
+    if head == "double" and rest and rest[0] == "blackjack":
+        rules.double_blackjack = _parse_bool_on_off(_require(rest, 1, "double blackjack on/off"))
+        return f"Double down on a natural blackjack: {'ON' if rules.double_blackjack else 'OFF'}"
 
     if head == "h17":
         rules.hit_soft_17 = True

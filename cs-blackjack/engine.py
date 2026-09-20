@@ -63,6 +63,7 @@ PEEK_RANKS = {"A", "10", "J", "Q", "K"}
 class Phase(Enum):
     EARLY_SURRENDER = auto()
     INSURANCE = auto()
+    DOUBLE_BLACKJACK = auto()  # only reachable with rules.double_blackjack on
     PLAYER_TURN = auto()
     DEALER_TURN = auto()
     REVEAL = auto()  # flipping any face-down double-down cards, just before settlement
@@ -322,17 +323,19 @@ class Round:
             # No peek possible on a 2-9 up card (a natural blackjack always
             # needs an Ace or ten-value up card) -- any player blackjack is
             # therefore already a guaranteed win, so it settles right away
+            # (or, with double_blackjack on, is offered a double instead)
             # rather than waiting on the rest of the round.
-            self._settle_immediate_blackjacks()
-            self.phase = Phase.PLAYER_TURN
-            self._advance_player_cursor()
+            self._offer_blackjack_doubles_or_proceed()
 
     # ------------------------------------------------------------------
     # Early surrender / insurance / even money / dealer peek
     # ------------------------------------------------------------------
 
     def current_prelim_spot(self) -> Optional[Spot]:
-        if self.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE) and self._prelim_index < len(self.play_order):
+        if (
+            self.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE, Phase.DOUBLE_BLACKJACK)
+            and self._prelim_index < len(self.play_order)
+        ):
             return self.spots[self.play_order[self._prelim_index]]
         return None
 
@@ -409,12 +412,9 @@ class Round:
         else:
             # Dealer confirmed clean -- any player blackjack that didn't
             # take even money is now a guaranteed win, so settle it right
-            # away rather than making it wait on the rest of the round.
-            self._settle_immediate_blackjacks()
-            self.phase = Phase.PLAYER_TURN
-            self._play_cursor = 0
-            self._current_hand_index = 0
-            self._advance_player_cursor()
+            # away (or, with double_blackjack on, offer a double instead)
+            # rather than making it wait on the rest of the round.
+            self._offer_blackjack_doubles_or_proceed()
 
     # ------------------------------------------------------------------
     # Player turn
@@ -543,18 +543,7 @@ class Round:
         elif action == "stand":
             hand.stood = True
         elif action == "double":
-            self.session.adjust_bankroll(-hand.bet)
-            hand.bet *= 2
-            hand.doubled = True
-            hand.add_card(self.session.shoe.draw())
-            if self.rules.double_facedown:
-                # The card (and so a possible bust) stays hidden until the
-                # REVEAL phase -- settling now would leak it early.
-                hand.double_hidden = True
-            elif hand.is_bust:
-                payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
-                self._record_settlement(spot, hand, outcome, payout)
-            self.session.stats.record_double()
+            self._apply_double(spot, hand)
         elif action == "split":
             self._do_split(spot, hand)
         elif action == "surrender":
@@ -566,6 +555,23 @@ class Round:
 
         self._advance_player_cursor()
         return None
+
+    def _apply_double(self, spot: Spot, hand: Hand) -> None:
+        """Doubles this hand's bet and draws its one additional card. A
+        resulting bust settles immediately, unless the card is dealt face
+        down (double_facedown), in which case it -- and any bust -- stays
+        hidden until the REVEAL phase. Shared by an ordinary in-turn
+        double and an accepted double on a natural blackjack."""
+        self.session.adjust_bankroll(-hand.bet)
+        hand.bet *= 2
+        hand.doubled = True
+        hand.add_card(self.session.shoe.draw())
+        if self.rules.double_facedown:
+            hand.double_hidden = True
+        elif hand.is_bust:
+            payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+            self._record_settlement(spot, hand, outcome, payout)
+        self.session.stats.record_double()
 
     def _do_split(self, spot: Spot, hand: Hand) -> None:
         self.session.adjust_bankroll(-hand.bet)
@@ -704,6 +710,52 @@ class Round:
             if hand.is_blackjack and not hand.settled:
                 payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
                 self._record_settlement(spot, hand, outcome, payout)
+
+    def _offer_blackjack_doubles_or_proceed(self) -> None:
+        """Called once it's known to be safe to resolve any lone player
+        blackjacks (no peek needed, or a clean peek). With double_blackjack
+        off, they settle immediately as wins, same as always. With it on,
+        each one is offered a chance to double instead of an automatic 3:2
+        payout -- in table order, like early surrender/insurance."""
+        if not self.rules.double_blackjack:
+            self._settle_immediate_blackjacks()
+            self.phase = Phase.PLAYER_TURN
+            self._play_cursor = 0
+            self._current_hand_index = 0
+            self._advance_player_cursor()
+            return
+        self.phase = Phase.DOUBLE_BLACKJACK
+        self._prelim_index = 0
+        self._advance_double_blackjack_cursor()
+
+    def _advance_double_blackjack_cursor(self) -> None:
+        while self._prelim_index < len(self.play_order):
+            hand = self.spots[self.play_order[self._prelim_index]].hands[0]
+            if hand.is_blackjack and not hand.settled:
+                return
+            self._prelim_index += 1
+        # Every offer has been answered -- any blackjack that declined a
+        # double (or was never offered one, e.g. a spot with no blackjack
+        # at all) settles the ordinary way now.
+        self._settle_immediate_blackjacks()
+        self.phase = Phase.PLAYER_TURN
+        self._play_cursor = 0
+        self._current_hand_index = 0
+        self._advance_player_cursor()
+
+    def respond_double_blackjack(self, accept: bool) -> None:
+        if self.phase != Phase.DOUBLE_BLACKJACK:
+            return
+        spot = self.spots[self.play_order[self._prelim_index]]
+        hand = spot.hands[0]
+        if accept and self.session.can_afford(hand.bet):
+            # A natural blackjack (Ace + ten-value) can never bust when
+            # doubled -- the extra card just settles onto a normal 12-21
+            # total -- so this always turns into an ordinary, still-live
+            # doubled hand rather than an immediate settlement.
+            self._apply_double(spot, hand)
+        self._prelim_index += 1
+        self._advance_double_blackjack_cursor()
 
     def _settle_pp_s21(self) -> None:
         """Power Poker and Star21 settle immediately after the deal -- both

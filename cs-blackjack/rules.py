@@ -23,6 +23,7 @@ class Rules:
     split_max_hands: int = 4  # max individual hands resulting from splitting non-ace pairs
     double_facedown: bool = False  # if True, a double-down card is dealt face down until dealer/settlement reveal
     rsa_facedown: bool = False  # if True (only settable while rsa is off), split-ace cards are dealt face down
+    double_blackjack: bool = False  # if True, a player dealt a natural blackjack is offered a double instead of an automatic 3:2 payout
 
     table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
     table_max: float = 5000.0  # max main wager on a single hand

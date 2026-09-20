@@ -390,6 +390,8 @@ def hand_status_text(hand: Hand, spot: Spot, round_: Round) -> str:
     if round_.phase == Phase.INSURANCE and round_.current_prelim_spot() is spot:
         kind = round_.insurance_prompt_kind(spot)
         return "Even Money?" if kind == "even_money" else "Insurance?"
+    if round_.phase == Phase.DOUBLE_BLACKJACK and round_.current_prelim_spot() is spot:
+        return "Double?"
     return ""
 
 
@@ -569,7 +571,13 @@ def _draw_sidebet_amounts(
     return rects
 
 
-_OUTCOME_LETTERS = {"player_win": "W", "dealer_win": "L", "push": "P", "surrender": "S"}
+# (singular, plural) word forms for the split-hand tally, keyed by outcome.
+_OUTCOME_WORDS = {
+    "player_win": ("Win", "Wins"),
+    "dealer_win": ("Loss", "Losses"),
+    "push": ("Push", "Pushes"),
+    "surrender": ("Surrender", "Surrenders"),
+}
 
 
 def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[str, int]:
@@ -584,19 +592,23 @@ def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[s
     $X returned" treatment (dark grass green). A handful of specific
     outcomes read as a different *kind* of event and get their own color:
     an immediate player blackjack (yellow on dark purple), any hand beaten
-    by a confirmed dealer blackjack (red on dark purple), a player bust
+    by a confirmed dealer blackjack (white on maroon), a player bust
     (white on deep red), and an accepted even money offer -- which is
     still the standard green, per spec, just its own distinct label. A
     doubled hand's win/loss also keeps the standard green, just labeled
     "Double Down Win"/"Double Down Loss" instead of the plain Win/Lose.
 
     A single hand shows its full result word; a split spot's multiple
-    hands instead tally letters, e.g. "1W 1L" (W/L/P/S, in that fixed
-    order). A split hand can never itself be a blackjack or have taken
-    even money (see Hand.is_blackjack), so the tally case only ever needs
-    to pick between the standard color and the dealer-blackjack one --
-    that's the one event that's always true of every hand in the spot at
-    once, so a single color for the whole tally still reads unambiguously."""
+    hands instead tally spelled-out counts, e.g. "2 Wins/1 Loss" (Win/
+    Loss/Push/Surrender, in that fixed order). A doubled hand that wins
+    counts double in its tally -- twice the money was on it -- so, e.g.,
+    splitting a pair and doubling down on one hand that then wins, with
+    the other hand also winning normally, reads "3 Wins", not "2 Wins".
+    A split hand can never itself be a blackjack or have taken even money
+    (see Hand.is_blackjack), so the tally case only ever needs to pick
+    between the standard color and the dealer-blackjack one -- that's the
+    one event that's always true of every hand in the spot at once, so a
+    single color for the whole tally still reads unambiguously."""
     if round_ is None:
         return "", 0
     results = [r for r in round_.results if r.spot_index == spot_index]
@@ -626,9 +638,18 @@ def _spot_settlement_banner(round_: Optional[Round], spot_index: int) -> Tuple[s
     else:
         counts: Dict[str, int] = {}
         for r in results:
-            letter = _OUTCOME_LETTERS[r.outcome]
-            counts[letter] = counts.get(letter, 0) + 1
-        text = " ".join(f"{counts[letter]}{letter}" for letter in ("W", "L", "P", "S") if letter in counts)
+            # A doubled win counts double -- twice the money was riding
+            # on that one hand, so it should weigh twice as much here too.
+            weight = 2 if (r.outcome == "player_win" and r.hand.doubled) else 1
+            counts[r.outcome] = counts.get(r.outcome, 0) + weight
+        parts = []
+        for outcome in ("player_win", "dealer_win", "push", "surrender"):
+            if outcome not in counts:
+                continue
+            n = counts[outcome]
+            singular, plural = _OUTCOME_WORDS[outcome]
+            parts.append(f"{n} {singular if n == 1 else plural}")
+        text = "/".join(parts)
         attr = dealer_bj_attr if round_.dealer_has_blackjack else standard_attr
 
     return f"{text} – ${total:,.2f} returned", attr
@@ -697,13 +718,13 @@ def _sidebet_banner_lines(round_: Optional[Round], spot: Spot) -> Tuple[Tuple[st
     """The side-bet banner's two rows, built as a list of paired frames
     that cycle together on a wall clock, one frame at a time, repeating --
     driven by _main's idle-timeout redraws, not a counter, so it keeps
-    animating even with no keypress. Each Power Poker/Star21/Buster win
-    pairs its own label (row 1) with the combined "Side Bets Total" (row
-    2, dark gray, everything settled so far including Insurance's own
-    contribution). Insurance gets its own frame instead -- "INSURANCE"
-    (row 1) paired with its own return (row 2), both beige -- shown
+    animating even with no keypress. Every frame pairs its own row-1 label
+    with the SAME row 2: the combined "Side Bets Total" (dark gray),
+    everything settled so far, Insurance's contribution included.
+    Insurance gets its own row-1 frame -- "INSURANCE" in beige -- shown
     whether it won or lost, since taking insurance is worth confirming
-    either way, not just when it pays off.
+    either way, not just when it pays off; unlike Power Poker/Star21/
+    Buster, it never gets its own row-2 total, just the shared one.
 
     Power Poker, Star21, and Insurance each settle immediately (right
     after the deal, and right after the dealer's peek, respectively), so
@@ -723,8 +744,7 @@ def _sidebet_banner_lines(round_: Optional[Round], spot: Spot) -> Tuple[Tuple[st
         ((_display_label(label), _sidebet_banner_attr(key, label)), gray_line) for key, label, _ in wins
     ]
     if insurance is not None:
-        beige_attr = curses.color_pair(INSURANCE_PAIR) | curses.A_BOLD
-        frames.append((("INSURANCE", beige_attr), (f"${insurance.win_amount:,.2f} returned", beige_attr)))
+        frames.append((("INSURANCE", curses.color_pair(INSURANCE_PAIR) | curses.A_BOLD), gray_line))
 
     if not frames:
         return empty, empty
@@ -792,7 +812,7 @@ def _draw_player_spot(
     is_active = active is not None and active[1] is hand
 
     status = hand_status_text(hand, spot, round_)
-    is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE)
+    is_prompt = status and round_.phase in (Phase.EARLY_SURRENDER, Phase.INSURANCE, Phase.DOUBLE_BLACKJACK)
     _safe_addstr(win, status_y, _center_x(status, col_width, cx), status, curses.A_REVERSE if is_prompt else curses.A_BOLD)
 
     hand_x = cx + max(0, (col_width - _card_block_width(hand)) // 2)
@@ -1076,6 +1096,8 @@ def render(
         hint = "S Surrender    RETURN Continue"
     elif round_.phase == Phase.INSURANCE:
         hint = "SPACE Yes    RETURN No"
+    elif round_.phase == Phase.DOUBLE_BLACKJACK:
+        hint = "D Double    RETURN No"
     elif round_.phase == Phase.PLAYER_TURN and active:
         legal = round_.legal_actions(*active)
         hint = "   ".join(label for key, label in ACTION_HINTS if key in legal)
@@ -1207,6 +1229,7 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         f"  Split Max Hands:     {r.split_max_hands}",
         f"  Table Limits:        {table_range}",
         f"  Double Facedown:     {'ON' if r.double_facedown else 'OFF'}",
+        f"  Double Blackjack:    {'ON' if r.double_blackjack else 'OFF'}",
         "",
         "SIDE BETS",
     ]
@@ -1243,15 +1266,16 @@ def render_betspread_screen(stdscr) -> None:
 
 
 def _blink_new_shoe(stdscr, session: GameSession, round_: Optional[Round]) -> None:
-    """Flashes over the header's "Cards Left" cell -- white background,
-    black text -- so a fresh shoe is unmistakable right where the count
-    that just reset to a full shoe lives."""
+    """Flashes over the CLI input line -- white background, black text --
+    so a fresh shoe is unmistakable even if the player's eyes are on
+    their cards or wager, not the header's small "Cards Left" cell (easy
+    to miss entirely when focused on play)."""
     msg = "** NEW SHOE **"
     attr = curses.color_pair(7) | curses.A_BOLD
     for i in range(6):
         cell_rects = render(stdscr, session, round_, "", "")
         if i % 2 == 0:
-            y, x, _h, w = cell_rects.get("cards_dealt", (0, 0, 1, 0))
+            y, x, _h, w = cell_rects.get("cli", (0, 0, 1, 0))
             width = max(w, len(msg))
             _safe_addstr(stdscr, y, x, " " * width, attr)
             _safe_addstr(stdscr, y, x, msg, attr)
@@ -1270,7 +1294,7 @@ SIDEBET_TOTAL_PAIR = 18  # "Side Bets Total" summary frame: dark gray
 # entirely distinct from STANDARD and from each other.
 STANDARD_SETTLEMENT_PAIR = 20  # standard win/lose/push/surrender/even-money: dark grass green
 PLAYER_BJ_PAIR = 21  # an immediate, unbeaten player blackjack: yellow on dark purple
-DEALER_BJ_PAIR = 22  # any hand beaten by a confirmed dealer blackjack: red on dark purple
+DEALER_BJ_PAIR = 22  # any hand beaten by a confirmed dealer blackjack: white on maroon
 BUST_PAIR = 23  # a player bust: white on deep red
 INSURANCE_PAIR = 24  # a settled Insurance side bet, win or lose: black on beige
 
@@ -1339,20 +1363,26 @@ def init_colors() -> None:
     dark_green = 22 if curses.COLORS >= 256 else curses.COLOR_GREEN
     curses.init_pair(STANDARD_SETTLEMENT_PAIR, curses.COLOR_WHITE, dark_green)
 
-    # An immediate player blackjack, and a hand beaten by a confirmed
-    # dealer blackjack -- both share a dark purple background (distinct
-    # from every other banner on screen) with their own accent color on
-    # top. True dark purple needs the extended palette; on a basic
-    # 8-color terminal, magenta is the closest available approximation.
+    # An immediate player blackjack: dark purple background (distinct from
+    # every other banner on screen) with yellow text. True dark purple
+    # needs the extended palette; on a basic 8-color terminal, magenta is
+    # the closest available approximation.
     dark_purple = 54 if curses.COLORS >= 256 else curses.COLOR_MAGENTA
     curses.init_pair(PLAYER_BJ_PAIR, curses.COLOR_YELLOW, dark_purple)
-    curses.init_pair(DEALER_BJ_PAIR, curses.COLOR_RED, dark_purple)
 
     # Player bust: a deep red, distinctly darker than the table-status
     # banner's own red (pair 5) so the two "red" banners don't blur
     # together. Falls back to plain red on a basic 8-color terminal.
     deep_red = 88 if curses.COLORS >= 256 else curses.COLOR_RED
     curses.init_pair(BUST_PAIR, curses.COLOR_WHITE, deep_red)
+
+    # A hand beaten by a confirmed dealer blackjack: maroon, darker still
+    # than both the top status bar's red (pair 5) and the bust deep-red
+    # above, with white text -- red-on-purple read poorly, white is a
+    # clean, unambiguous swap. Falls back to plain red on a basic
+    # 8-color terminal (no darker red is available there).
+    maroon = 52 if curses.COLORS >= 256 else curses.COLOR_RED
+    curses.init_pair(DEALER_BJ_PAIR, curses.COLOR_WHITE, maroon)
 
     # Insurance: a beige background with black text, distinct from every
     # other side-bet color -- shown whether it wins or loses, so it reads
@@ -1586,6 +1616,23 @@ def _main(stdscr) -> None:
                 elif ch in RETURN_KEYS:
                     message = ""
                     round_.respond_insurance(False)
+                else:
+                    handled = False
+                if handled:
+                    msg = _after_engine_change(round_, session, stdscr)
+                    if msg is not None:
+                        message = msg
+                    curses.flushinp()  # discard any keys queued up during the response/animation above
+                    continue
+
+            elif round_ is not None and round_.phase == Phase.DOUBLE_BLACKJACK and buffer == "":
+                handled = True
+                if ch in (ord("d"), ord("D")):
+                    message = ""
+                    round_.respond_double_blackjack(True)
+                elif ch in RETURN_KEYS:
+                    message = ""
+                    round_.respond_double_blackjack(False)
                 else:
                     handled = False
                 if handled:
