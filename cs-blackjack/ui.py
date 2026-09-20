@@ -26,12 +26,20 @@ CARD_ROW_WIDTH = CARD_W + FAN_OFFSET * (MAX_CARDS_IN_GRID - 1)
 CARD_BLOCK_HEIGHT = CARD_H
 
 # ---- Table geometry ----
-MARGIN_COLS = 12  # ~1.0in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
+MARGIN_COLS = 6  # ~0.5in left/right margin, assuming a typical ~8px/char terminal font at 96dpi
 NUM_SPOT_COLUMNS = 3  # all three player spots are always visible/navigable, regardless of `hands`
+
+# Spot index -> its on-screen column slot (0=left, 1=middle, 2=right). Spot
+# 0 ("Hand #1") sits front-and-center under the dealer since it's the one
+# spot that's always in play; spots 1 and 2 ("Hand #2"/"#3") fill outward
+# to the left and right as more hands are added. This mapping is its own
+# inverse (slot -> spot uses the same array), which is what lets the
+# left/right arrow-key wager-grid navigation below just run it both ways.
+SPOT_SCREEN_ORDER = [1, 0, 2]
 
 # ---- Wager cell boxes ----
 MAIN_WAGER_BOX_W = 12
-SIDEBET_BOX_W = 12  # fits "PowerPoker" (10 chars), the longest side-bet title, exactly
+SIDEBET_BOX_W = 13  # fits "Power Poker" (11 chars), the longest side-bet title, exactly
 SIDEBET_BOX_GAP = 2
 SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
 
@@ -43,8 +51,9 @@ STATS_LIFETIME_ROWS = 6  # per sub-column (2 sub-columns)
 STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_ROWS)
 
 # Side-bet paytables, mirroring the odds in sidebets.py's evaluators --
-# shown inline in the stats bar (see PAYOUT_COL_W etc. below), titled to
-# match the compact SIDEBET_LABELS used on the wager cells above.
+# shown inline in the stats bar (see PAYOUT_COL_W etc. below). Titled with
+# the compact (no-space) form of each bet's name -- these run narrower
+# than the wager-cell boxes, which use SIDEBET_LABELS below instead.
 PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
     ("PowerPoker", [
         ("Royal Flush", "50:1"),
@@ -84,7 +93,8 @@ STATS_BLOCK_ROWS = max(STATS_MAX_ROWS, PAYOUT_MAX_ROWS)  # shared row budget for
 # overlapped, but truncate into gibberish well before the card/wager rows
 # would ever collide).
 STATS_MIN_COL_W = 25  # per stats sub-column (4 sub-columns: session x2, lifetime x2)
-STATS_ROW_MIN_WIDTH = (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4
+STATS_INNER_GAP = 4  # buffer between Session's own 2 sub-columns, and between Lifetime's own 2
+STATS_ROW_MIN_WIDTH = (PAYOUT_COL_W * 3 + PAYOUT_GAP * 2) + 4 + STATS_MIN_COL_W * 4 + STATS_INNER_GAP * 2
 MIN_COLS = max(
     2 * MARGIN_COLS + MIN_COL_WIDTH * NUM_SPOT_COLUMNS,
     2 * MARGIN_COLS + STATS_ROW_MIN_WIDTH,
@@ -93,15 +103,16 @@ MIN_COLS = max(
 # ---- Vertical content budget ----
 # Rows, top to bottom: title(1) + rules-summary/card-count/bankroll
 # banner(1) + table-status/running-true banner(1) + divider(1) + dealer
-# status(1) + dealer value(1) + dealer cards(CARD_BLOCK_HEIGHT) +
-# buffer(1) + chips row(1) + player status(1) + player cards
-# (CARD_BLOCK_HEIGHT) + player overflow-ticker row(1) + active value(1) +
-# buffer(1) + main wager box(3) + main wager payout row(1) + side-bet
-# titles(1) + side-bet boxes(3) + side-bet win/payout banner row(1) +
+# status(1) + dealer value(1) + dealer cards(CARD_BLOCK_HEIGHT) + chips
+# row(1) + player status(1) + player cards(CARD_BLOCK_HEIGHT) + player
+# overflow-ticker row(1) + active value(1) + buffer(1) + main wager
+# box(3) + main-bet settlement banner row(1) + side-bet boxes(3) (each
+# bet's own name doubles as its header, so no separate title row) +
+# side-bet banner: winning label(s)(1) + combined total(1) +
 # hint/message(1) + blank(1) + input(1) + blank(1) + divider(1) +
 # stats/payout header(1) + stats/payout rows(STATS_BLOCK_ROWS).
 CONTENT_HEIGHT = (
-    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + 3 + 1 + 1 + 3 + 1
+    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + 3 + 1 + 3 + 1 + 1
     + 1 + 1 + 1 + 1 + 1 + 1 + STATS_BLOCK_ROWS
 )
 # +2 reserves the top/bottom rows of the border frame around the whole
@@ -120,7 +131,8 @@ ACTION_HINTS = [
 # Betting-grid rows: index 0 is the main wager, 1-3 are the side bets, in the
 # same left-to-right order they're drawn on screen (PP, S21, BUST).
 ROW_KEYS = [None, "power_poker", "star21", "dealer_buster"]
-SIDEBET_LABELS = ["PowerPoker", "Star21", "Buster"]
+SIDEBET_LABELS = ["Power Poker", "Star 21", "Buster"]
+BUSTER_CELL_PAIR = 19  # Buster's wager-cell theme: a neutral mid-orange, black text
 WAGER_MAX_LEN = 8
 SIDEBET_MAX_LEN = 5
 
@@ -356,6 +368,12 @@ def hand_value_label(hand: Hand, hide_hole: bool = False, resolved: bool = False
 
 
 def hand_status_text(hand: Hand, spot: Spot, round_: Round) -> str:
+    """Text for the line above a hand's cards -- interactive prompts, and
+    BUST as immediate feedback the moment it happens. The hand's actual
+    result (Win/Lose/Push/Surrendered/BLACKJACK) is NOT shown here; that
+    now lives only in the spot's settlement banner below the wager box,
+    so a hand's outcome is never announced twice in two different spots
+    on screen."""
     if round_ is None:
         return ""
     if round_.phase == Phase.EARLY_SURRENDER and round_.current_prelim_spot() is spot:
@@ -363,16 +381,8 @@ def hand_status_text(hand: Hand, spot: Spot, round_: Round) -> str:
     if round_.phase == Phase.INSURANCE and round_.current_prelim_spot() is spot:
         kind = round_.insurance_prompt_kind(spot)
         return "Even Money?" if kind == "even_money" else "Insurance?"
-    if hand.surrendered:
-        return "Surrendered"
     if hand.is_bust:
         return "BUST"
-    if hand.is_blackjack:
-        return "BLACKJACK"
-    if round_.phase == Phase.SETTLED:
-        for r in round_.results:
-            if r.hand is hand:
-                return OUTCOME_LABELS[r.outcome]
     return ""
 
 
@@ -484,10 +494,19 @@ def _draw_wager_cell(
     _safe_addstr(win, box_y + 1, _center_x_right_bias(text, MAIN_WAGER_BOX_W - 2, box_x + 1), text, attr)
 
 
-def _draw_sidebet_headers(win, y: int, x: int) -> None:
-    for slot, label in enumerate(SIDEBET_LABELS):
-        sub_x = x + slot * (SIDEBET_BOX_W + SIDEBET_BOX_GAP)
-        _safe_addstr(win, y, _center_x(label, SIDEBET_BOX_W, sub_x), label, curses.A_DIM | curses.A_UNDERLINE)
+def _draw_colored_box(win, y: int, x: int, width: int, attr: int) -> None:
+    """Like _draw_box, but the whole cell -- border and interior -- is
+    filled with a color pair instead of left on the default background,
+    for a side bet's themed wager cell."""
+    _safe_addstr(win, y, x, "┌" + "─" * (width - 2) + "┐", attr)
+    _safe_addstr(win, y + 1, x, " " * width, attr)
+    _safe_addstr(win, y + 2, x, "└" + "─" * (width - 2) + "┘", attr)
+
+
+# Each side bet's wager cell is permanently tinted in its own color, the
+# same pairs used for that bet's plain (non-jackpot) win banner -- already
+# white/black text, never the gold accent reserved for a bet's rarest hit.
+SIDEBET_CELL_PAIR = {"power_poker": 8, "star21": 10, "dealer_buster": BUSTER_CELL_PAIR}
 
 
 def _draw_sidebet_amounts(
@@ -517,24 +536,56 @@ def _draw_sidebet_amounts(
             _draw_box(win, box_y, sub_x, SIDEBET_BOX_W, dim=True)
             _safe_addstr(win, box_y + 1, _center_x_right_bias("Off", SIDEBET_BOX_W - 2, sub_x + 1), "Off", curses.A_DIM)
             continue
+        if round_ is not None and col < len(round_.spots):
+            wager = round_.spots[col].side_bet_wagers.get(key, 0.0)
+        else:
+            wager = session.side_bet_wagers[col].get(key, 0.0)
         if is_focused and bet_edit_buffer:
             text = bet_edit_buffer
-        elif round_ is not None and col < len(round_.spots):
-            text = f"{round_.spots[col].side_bet_wagers.get(key, 0.0):,.0f}"
+        elif wager > 0:
+            text = f"{wager:,.0f}"
         else:
-            text = f"{session.side_bet_wagers[col].get(key, 0.0):,.0f}"
-        _draw_box(win, box_y, sub_x, SIDEBET_BOX_W, dim=dim)
-        attr = curses.A_REVERSE if is_focused else (curses.A_DIM if dim else 0)
-        _safe_addstr(win, box_y + 1, _center_x_right_bias(text, SIDEBET_BOX_W - 2, sub_x + 1), text, attr)
+            # No wager on this bet yet -- the bet's own name fills the
+            # cell in place of a bare "0", doubling as the zero value.
+            text = SIDEBET_LABELS[slot]
+        cell_attr = curses.color_pair(SIDEBET_CELL_PAIR[key])
+        if dim:
+            cell_attr |= curses.A_DIM
+        _draw_colored_box(win, box_y, sub_x, SIDEBET_BOX_W, cell_attr)
+        text_attr = (cell_attr | curses.A_REVERSE) if is_focused else cell_attr
+        _safe_addstr(win, box_y + 1, _center_x_right_bias(text, SIDEBET_BOX_W - 2, sub_x + 1), text, text_attr)
         rects[(row, col)] = (box_y, sub_x, 3, SIDEBET_BOX_W)
     return rects
 
 
-def _spot_payout_text(round_: Optional[Round], spot_index: int) -> str:
+_OUTCOME_LETTERS = {"player_win": "W", "dealer_win": "L", "push": "P", "surrender": "S"}
+
+
+def _spot_settlement_text(round_: Optional[Round], spot_index: int) -> str:
+    """Main-bet settlement banner text: the hand's result, then the total
+    returned across all of this spot's hands -- "Win – $20.00 returned",
+    or "Lose – $0.00 returned". A single hand shows its full result word,
+    with a natural blackjack called out as "BLACKJACK" instead of "Win"
+    (a split hand can never itself be a blackjack -- see Hand.is_blackjack
+    -- so this only ever applies to an unsplit hand). Multiple hands (from
+    a split) instead tally letters, e.g. "1W 1L", W/L/P/S for
+    Win/Lose/Push/Surrendered, in that fixed order."""
     if round_ is None or round_.phase != Phase.SETTLED:
         return ""
-    total = sum(r.payout for r in round_.results if r.spot_index == spot_index)
-    return f"${total:,.2f} returned"
+    results = [r for r in round_.results if r.spot_index == spot_index]
+    if not results:
+        return ""
+    total = sum(r.payout for r in results)
+    if len(results) == 1:
+        r = results[0]
+        result_text = "BLACKJACK" if r.hand.is_blackjack else OUTCOME_LABELS[r.outcome]
+    else:
+        counts: Dict[str, int] = {}
+        for r in results:
+            letter = _OUTCOME_LETTERS[r.outcome]
+            counts[letter] = counts.get(letter, 0) + 1
+        result_text = " ".join(f"{counts[letter]}{letter}" for letter in ("W", "L", "P", "S") if letter in counts)
+    return f"{result_text} – ${total:,.2f} returned"
 
 
 _SIDEBET_KEYS_ORDERED = ("power_poker", "star21", "dealer_buster")
@@ -584,25 +635,6 @@ def _spot_sidebet_wins(round_: Round, spot: Spot) -> List[Tuple[str, str, float]
     return wins
 
 
-def _sidebet_banner_flash_sequence(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
-    """(text, attr) frames for the settlement flash animation: each
-    winning side bet's label, then its payout (both in that bet's color),
-    in turn, always followed by a final dark-gray frame with the combined
-    total -- even with only one winning side bet -- so every settlement
-    ends the same way regardless of how many side bets hit."""
-    wins = _spot_sidebet_wins(round_, spot)
-    if not wins:
-        return []
-    frames: List[Tuple[str, int]] = []
-    for key, label, amount in wins:
-        attr = _sidebet_banner_attr(key, label)
-        frames.append((_display_label(label), attr))
-        frames.append((f"${amount:,.2f} returned", attr))
-    total = sum(amount for _, _, amount in wins)
-    frames.append((f"Side Bets Total: ${total:,.2f} returned", curses.color_pair(SIDEBET_TOTAL_PAIR) | curses.A_BOLD))
-    return frames
-
-
 def _sidebet_live_wins(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
     """(text, attr) frames for win labels already confirmed for this spot
     before settlement. Power Poker and Star21 are knowable as soon as the
@@ -610,8 +642,7 @@ def _sidebet_live_wins(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
     can be confirmed on screen right away and held there through the
     player's whole turn. Dealer Buster has no such preview -- it depends
     on the dealer's full hand, which isn't drawn until after the player
-    is done -- so it never appears here, only in the settlement flash
-    sequence."""
+    is done -- so it never appears here, only once settled."""
     results: List[Tuple[str, int]] = []
     for key in ("power_poker", "star21"):
         wager = spot.side_bet_wagers.get(key, 0.0)
@@ -623,31 +654,33 @@ def _sidebet_live_wins(round_: Round, spot: Spot) -> List[Tuple[str, int]]:
     return results
 
 
-def _sidebet_banner_default_text(round_: Optional[Round], spot: Spot) -> Tuple[str, int]:
-    """What the side-bet banner shows outside of a forced (settlement)
-    frame sequence: the final settlement frame once settled (so the
-    result stays legible after the animation ends), or -- while the round
-    is still live -- a wall-clock-driven flash between whichever side
-    bets are already confirmed winners. Deriving the frame from the
-    clock (rather than a counter advanced on each render) means it keeps
-    flickering during genuine idle time too, driven by _main's
-    stdscr.timeout()-based redraws, not just when the player acts."""
+def _sidebet_banner_lines(round_: Optional[Round], spot: Spot) -> Tuple[Tuple[str, int], Tuple[str, int]]:
+    """The side-bet banner's two rows. Row 1 cycles the winning label(s)
+    on a wall clock (same flicker whether it's a live preview before
+    settlement or the final result after), one at a time, repeating --
+    e.g. "FLUSH" -> "UNSUITED 21" -> "FLUSH" -> ... -- driven by _main's
+    idle-timeout redraws, not a counter, so it keeps animating even with
+    no keypress. Row 2 is the static combined total once settled ("Side
+    Bets Total: $X returned", dark gray); it stays blank before that,
+    since Dealer Buster's contribution isn't knowable until the dealer's
+    hand resolves, so any earlier total would be incomplete."""
+    empty = ("", _DEFAULT_BANNER_ATTR)
     if round_ is None:
-        return "", _DEFAULT_BANNER_ATTR
+        return empty, empty
     if round_.phase == Phase.SETTLED:
-        seq = _sidebet_banner_flash_sequence(round_, spot)
-        return seq[-1] if seq else ("", _DEFAULT_BANNER_ATTR)
+        wins = _spot_sidebet_wins(round_, spot)
+        if not wins:
+            return empty, empty
+        labels = [(_display_label(label), _sidebet_banner_attr(key, label)) for key, label, _ in wins]
+        frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(labels)
+        total = sum(amount for _, _, amount in wins)
+        total_line = (f"Side Bets Total: ${total:,.2f} returned", curses.color_pair(SIDEBET_TOTAL_PAIR) | curses.A_BOLD)
+        return labels[frame], total_line
     wins = _sidebet_live_wins(round_, spot)
     if not wins:
-        return "", _DEFAULT_BANNER_ATTR
+        return empty, empty
     frame = int(time.monotonic() * 1000 // _BANNER_FRAME_MS) % len(wins)
-    return wins[frame]
-
-
-def _draw_result_row(win, y: int, x: int, width: int, text: str, attr: int = curses.A_BOLD) -> None:
-    if not text:
-        return
-    _safe_addstr(win, y, _center_x(text, width, x), text, attr)
+    return wins[frame], empty
 
 
 def _active_hand_index(spot: Spot, round_: Round) -> int:
@@ -756,7 +789,6 @@ def render(
     bet_col: int = 0,
     bet_edit_buffer: str = "",
     input_focus: str = "wager",
-    banner_override: Optional[Dict[int, Tuple[str, int]]] = None,
 ) -> CellRects:
     stdscr.erase()
     win = stdscr
@@ -833,7 +865,6 @@ def render(
     if round_:
         draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
     y += CARD_BLOCK_HEIGHT
-    y += 1  # buffer before the player's area
 
     # ---- PLAYER: collapsed chips for any already-completed split hands
     # (above the cards, where they've always been) -> status -> cards ->
@@ -852,23 +883,26 @@ def render(
     y += 1
     y += 1  # buffer before the wager box's top border
 
-    # ---- Per-spot wager block: main wager, its payout, side-bet
-    # header/boxes, then the side-bet win/payout banner ----
+    # ---- Per-spot wager block: main wager, its settlement banner,
+    # side-bet boxes (each bet's own name doubles as its zero-wager
+    # placeholder, so no separate header row is needed above them), then
+    # the 2-row side-bet banner: winning label(s) cycling, then the
+    # static combined total ----
     wager_box_y = y
     y += 3
-    payout_row_y = y
-    y += 1
-    sidebet_header_y = y
+    settlement_row_y = y
     y += 1
     sidebet_box_y = y
     y += 3
-    banner_row_y = y
+    banner_row1_y = y
+    y += 1
+    banner_row2_y = y
 
     num_hands = session.rules.num_hands
     active = round_.current_player_hand() if round_ else None
 
     for i in range(NUM_SPOT_COLUMNS):
-        cx = col_x[i]
+        cx = col_x[SPOT_SCREEN_ORDER[i]]
         in_play = round_ is not None and i < len(round_.spots)
 
         if in_play:
@@ -894,23 +928,25 @@ def render(
         cell_rects[(0, i)] = (wager_box_y, wager_box_x, 3, MAIN_WAGER_BOX_W)
 
         sidebet_group_x = cx + max(0, (col_width - SIDEBET_GROUP_W) // 2)
-        _draw_sidebet_headers(win, sidebet_header_y, sidebet_group_x)
         sb_rects = _draw_sidebet_amounts(win, sidebet_box_y, sidebet_group_x, i, session, round_, betting, bet_row, bet_col, bet_edit_buffer, input_focus, dim)
         cell_rects.update(sb_rects)
 
         if in_play:
             spot = round_.spots[i]
-            _draw_result_row(win, payout_row_y, cx, col_width, _spot_payout_text(round_, i))
-            if banner_override is not None:
-                banner_text, banner_attr = banner_override.get(i, ("", _DEFAULT_BANNER_ATTR))
-            else:
-                banner_text, banner_attr = _sidebet_banner_default_text(round_, spot)
-            if banner_text:
-                _draw_filled_banner(win, banner_row_y, cx, col_width, banner_text, banner_attr)
+            settlement_text = _spot_settlement_text(round_, i)
+            if settlement_text:
+                _draw_filled_banner(win, settlement_row_y, cx, col_width, settlement_text, curses.color_pair(4) | curses.A_BOLD)
+            line1, line2 = _sidebet_banner_lines(round_, spot)
+            banner1_text, banner1_attr = line1
+            banner2_text, banner2_attr = line2
+            if banner1_text:
+                _draw_filled_banner(win, banner_row1_y, cx, col_width, banner1_text, banner1_attr)
+            if banner2_text:
+                _draw_filled_banner(win, banner_row2_y, cx, col_width, banner2_text, banner2_attr)
 
     # ---- Hint / message line (shows the active message in place of the
     # contextual hint when there is one) ----
-    hint_y = banner_row_y + 1
+    hint_y = banner_row2_y + 1
     hint = ""
     if round_ is None:
         hint = "Arrows/mouse: move  |  digits: type amount  |  RETURN: confirm / deal"
@@ -973,12 +1009,18 @@ def render(
     sess_a, sess_b = session_rows[:STATS_SESSION_ROWS], session_rows[STATS_SESSION_ROWS:]
     life_a, life_b = life_rows[:STATS_LIFETIME_ROWS], life_rows[STATS_LIFETIME_ROWS:]
 
+    # A gap sits between each table's own two sub-columns (session's
+    # names+values vs. its second names+values, and likewise for
+    # lifetime), so the left sub-column's values never run up against the
+    # right sub-column's names -- but not between the two tables
+    # themselves, which already have SESSION/LIFETIME STATS headers
+    # marking that boundary.
     stats_region_w = max(1, usable_width - (stats_x0 - left_margin))
-    stats_col_w = max(1, stats_region_w // 4)
+    stats_col_w = max(1, (stats_region_w - 2 * STATS_INNER_GAP) // 4)
     sess_a_x = stats_x0
-    sess_b_x = stats_x0 + stats_col_w
-    life_a_x = stats_x0 + 2 * stats_col_w
-    life_b_x = stats_x0 + 3 * stats_col_w
+    sess_b_x = sess_a_x + stats_col_w + STATS_INNER_GAP
+    life_a_x = sess_b_x + stats_col_w
+    life_b_x = life_a_x + stats_col_w + STATS_INNER_GAP
 
     _safe_addstr(win, stats_y, sess_a_x, "SESSION STATS", curses.A_BOLD | curses.A_UNDERLINE)
     _safe_addstr(win, stats_y, life_a_x, "LIFETIME STATS", curses.A_BOLD | curses.A_UNDERLINE)
@@ -1148,6 +1190,13 @@ def init_colors() -> None:
     gray_bg = 238 if curses.COLORS >= 256 else curses.COLOR_BLACK
     curses.init_pair(SIDEBET_TOTAL_PAIR, curses.COLOR_WHITE, gray_bg)
 
+    # Buster's wager-cell theme -- a mid-tone orange (matching the lighter
+    # half of the bust-length ramp above) with black text, so its idle
+    # wager cell reads as "orange" without borrowing a specific bust-length
+    # stage's exact shade.
+    buster_cell_bg = 216 if curses.COLORS >= 256 else curses.COLOR_YELLOW
+    curses.init_pair(BUSTER_CELL_PAIR, curses.COLOR_BLACK, buster_cell_bg)
+
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
     while round_ is not None and round_.phase == Phase.DEALER_TURN:
@@ -1159,20 +1208,11 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         curses.napms(700)
         round_.reveal_doubles()
     if round_ is not None and round_.phase == Phase.SETTLED:
-        # Flash each spot's winning side bets (label, then payout, one
-        # after another, ending on the combined total if more than one
-        # side bet hit), 1.5s per frame; shorter sequences hold their last
-        # frame while longer ones keep going. Skipped entirely if nothing
-        # anywhere won, so a round with no side bets in play never pauses.
-        sequences = {i: _sidebet_banner_flash_sequence(round_, spot) for i, spot in enumerate(round_.spots)}
-        max_len = max((len(seq) for seq in sequences.values()), default=0)
-        for step in range(max_len):
-            frames = {i: (seq[min(step, len(seq) - 1)] if seq else ("", _DEFAULT_BANNER_ATTR)) for i, seq in sequences.items()}
-            render(stdscr, session, round_, "", "", banner_override=frames)
-            curses.napms(1500)
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
-        # No summary text needed here -- the per-spot payout/banner rows
-        # already show every hand's outcome.
+        # No summary text needed here -- the per-spot settlement/side-bet
+        # banner rows already show every hand's outcome, and _main's own
+        # idle-timeout redraws keep the side-bet label(s) cycling from
+        # here on (see _sidebet_banner_lines) without any forced pause.
         return ""
     return None
 
@@ -1406,12 +1446,17 @@ def _main(stdscr) -> None:
             elif round_ is None:
                 if ch == curses.KEY_LEFT:
                     commit_bet_cell()
-                    bet_col = max(0, bet_col - 1)
+                    # Step by actual screen position, not raw spot index --
+                    # spot 0 ("Hand #1") sits in the middle column, so a
+                    # plain bet_col-1 would jump the wrong way visually.
+                    screen_slot = max(0, SPOT_SCREEN_ORDER[bet_col] - 1)
+                    bet_col = SPOT_SCREEN_ORDER[screen_slot]
                     input_focus = "wager"
                     continue
                 if ch == curses.KEY_RIGHT:
                     commit_bet_cell()
-                    bet_col = min(NUM_SPOT_COLUMNS - 1, bet_col + 1)
+                    screen_slot = min(NUM_SPOT_COLUMNS - 1, SPOT_SCREEN_ORDER[bet_col] + 1)
+                    bet_col = SPOT_SCREEN_ORDER[screen_slot]
                     input_focus = "wager"
                     continue
                 if ch == curses.KEY_UP:
