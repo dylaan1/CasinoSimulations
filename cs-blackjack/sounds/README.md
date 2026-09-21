@@ -12,6 +12,7 @@ installed, so the game runs fine with this folder empty).
 | `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
 | `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
 | `wager-win.wav` | A round that ends with a positive net return across all wagers combined. |
+| `bust-sound.wav` | A player hand busting (on a hit, or a face-up double-down), or the dealer's hand busting. |
 
 Playback runs via whichever of `afplay`/`paplay`/`aplay`/`ffplay`/`mpg123`
 is found on the system `PATH`.

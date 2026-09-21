@@ -5,10 +5,11 @@ module -- create the folder if it doesn't exist yet) and they play
 automatically the next time the game runs; nothing needs to change in
 code. Expected filenames:
 
-    card-deal.mp3         a card being dealt or turned face up
+    card-deal.mp3           a card being dealt or turned face up
     sidebet-normal-win.wav  a side-bet win paying 49:1 or lower
-    sidebet-big-win.wav      a side-bet win paying 50:1 or higher
-    wager-win.wav            a round with a positive net return overall
+    sidebet-big-win.wav     a side-bet win paying 50:1 or higher
+    wager-win.wav           a round with a positive net return overall
+    bust-sound.wav          a player hand or the dealer's hand busting
 
 Playback runs in a background thread via whatever command-line player is
 already on the system (afplay/paplay/aplay/ffplay/mpg123) -- there's no
@@ -31,6 +32,7 @@ CARD_DEAL = "card-deal.mp3"
 SIDEBET_NORMAL_WIN = "sidebet-normal-win.wav"
 SIDEBET_BIG_WIN = "sidebet-big-win.wav"
 WAGER_WIN = "wager-win.wav"
+BUST = "bust-sound.wav"
 
 # Big enough odds to feel like a jackpot rather than a routine side-bet
 # win -- 50:1 and up gets the bigger sting, per spec.
@@ -79,7 +81,8 @@ def play(filename: str) -> None:
                 [*cmd, path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=10,
+                timeout=5,  # a misbehaving player (e.g. no audio device at all)
+                            # should never tie up a background thread for long
             )
         except Exception:
             pass

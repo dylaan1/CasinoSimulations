@@ -1627,7 +1627,15 @@ def _animate_deal(stdscr, session: GameSession, round_: Round) -> None:
 
 
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
+    dealer_bust_announced = False
     while round_ is not None and round_.phase == Phase.DEALER_TURN:
+        if round_.dealer_hand.is_bust and not dealer_bust_announced:
+            # Fires the same iteration the busting card first renders --
+            # the card that tipped the dealer over 21 was drawn at the end
+            # of the *previous* iteration's step_dealer() call, so this is
+            # the first render where the bust is actually visible.
+            sound.play(sound.BUST)
+            dealer_bust_announced = True
         render(stdscr, session, round_, "", "Dealer is drawing...")
         # Covers both the dealer's hole card turning face up (the loop's
         # first pass, even when the dealer draws no further cards at all)
@@ -1714,19 +1722,28 @@ def _main(stdscr) -> None:
     # anything else, so no individual call site needs to manage it.
     shoe_message_started_at: Optional[float] = None
     cell_rects: CellRects = {}
-    # How many of round_.side_bet_results have already had their win sound
-    # played -- reset to 0 whenever a new round starts (side_bet_results is
-    # append-only within a round, so anything past this slice is new).
+    # How many of round_.side_bet_results / round_.results have already had
+    # their sound played -- both reset to 0 whenever a new round starts
+    # (both lists are append-only within a round, so anything past these
+    # slices is new).
     sound_side_bets_announced = 0
+    sound_results_announced = 0
 
-    def announce_new_side_bet_sounds() -> None:
-        nonlocal sound_side_bets_announced
+    def announce_new_settlement_sounds() -> None:
+        nonlocal sound_side_bets_announced, sound_results_announced
         if round_ is None:
             return
         for result in round_.side_bet_results[sound_side_bets_announced:]:
             if result.win_amount > 0:
                 sound.play_sidebet_win(result.payout_multiplier)
         sound_side_bets_announced = len(round_.side_bet_results)
+        # A player hand that busted on a hit or a face-up double (a
+        # face-down double is always bust-proof by design -- see
+        # _apply_double) settles immediately, same as here.
+        for result in round_.results[sound_results_announced:]:
+            if result.hand.is_bust:
+                sound.play(sound.BUST)
+        sound_results_announced = len(round_.results)
 
     bet_row = 0
     bet_col = 0
@@ -1873,7 +1890,7 @@ def _main(stdscr) -> None:
                     msg = _after_engine_change(round_, session, stdscr)
                     if msg is not None:
                         message = msg
-                    announce_new_side_bet_sounds()
+                    announce_new_settlement_sounds()
                     curses.flushinp()  # discard any keys queued up during the response/animation above
                     continue
 
@@ -1891,7 +1908,7 @@ def _main(stdscr) -> None:
                     msg = _after_engine_change(round_, session, stdscr)
                     if msg is not None:
                         message = msg
-                    announce_new_side_bet_sounds()
+                    announce_new_settlement_sounds()
                     curses.flushinp()  # discard any keys queued up during the response/animation above
                     continue
 
@@ -1909,7 +1926,7 @@ def _main(stdscr) -> None:
                     msg = _after_engine_change(round_, session, stdscr)
                     if msg is not None:
                         message = msg
-                    announce_new_side_bet_sounds()
+                    announce_new_settlement_sounds()
                     curses.flushinp()  # discard any keys queued up during the response/animation above
                     continue
 
@@ -1934,7 +1951,7 @@ def _main(stdscr) -> None:
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg
-                        announce_new_side_bet_sounds()
+                        announce_new_settlement_sounds()
                         curses.flushinp()  # discard any keys queued up during the action/animation above
                     continue
 
@@ -2029,13 +2046,14 @@ def _main(stdscr) -> None:
                     else:
                         round_ = new_round
                         sound_side_bets_announced = 0  # fresh round -- nothing announced yet
+                        sound_results_announced = 0
                         message = ""
                         curses.flushinp()  # a queued key shouldn't fire mid-animation as an early action
                         _animate_deal(stdscr, session, round_)
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg
-                        announce_new_side_bet_sounds()
+                        announce_new_settlement_sounds()
                         curses.flushinp()  # ...or land as a snap decision the instant the deal finishes
                     continue
                 if input_focus != "cli" and 32 <= ch < 127:

@@ -249,6 +249,7 @@ matching file into `cs-blackjack/sounds/` (see that folder's own
 | `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
 | `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
 | `wager-win.wav` | A round that settles with a positive net return overall. |
+| `bust-sound.wav` | A player hand busting (a hit, or a face-up double-down), or the dealer's hand busting. |
 
 **Bankroll and statistics**
 
