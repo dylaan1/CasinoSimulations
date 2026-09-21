@@ -183,12 +183,12 @@ stats bar, its own themed wager cell, and its own min/max bet:
 
   | # of Cards | Payout (2+ decks) | Payout (Single Deck) |
   |---|---|---|
-  | 3 | 2:1 | 2:1 |
-  | 4 | 3:1 | 3:1 |
-  | 5 | 12:1 | 12:1 |
-  | 6 | 50:1 | 50:1 |
-  | 7 | 100:1 | 100:1 |
   | 8+ | 250:1 | **500:1** |
+  | 7 | 100:1 | 100:1 |
+  | 6 | 50:1 | 50:1 |
+  | 5 | 12:1 | 12:1 |
+  | 4 | 3:1 | 3:1 |
+  | 3 | 2:1 | 2:1 |
 
   Whenever a shoe is cut (session start, `newshoe`, or the automatic
   post-round reshuffle) that no longer supports an enabled Power Poker or
