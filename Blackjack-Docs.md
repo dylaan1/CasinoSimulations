@@ -165,8 +165,6 @@ stats bar, its own themed wager cell, and its own min/max bet:
 - **Star 21** — the same three cards summed like a 21 total. Requires **2+
   decks**; the paytable itself depends on exactly how many:
 
-  *Standard table (3+ decks):*
-
   | Hand | Payout (Standard) | Payout (Double Deck) |
   |---|---|---|
   | Suited 7-7-7♦ | 5000:1 | –– |
@@ -178,18 +176,6 @@ stats bar, its own themed wager cell, and its own min/max bet:
   | Unsuited 21 | 8:1 | 10:1 |
   | Any 20 | 4:1 | 4:1 |
   | Any 19 | 3:1 | 3:1 |
-
-  *Double-deck table (exactly 2 decks — no 7-7-7 categories; a 7-7-7 hand
-  just pays as a plain 21):*
-
-  | Hand | Pays |
-  |---|---|
-  | Suited 6-7-8 | 500:1 |
-  | Suited 21 | 50:1 |
-  | Unsuited 6-7-8 | 40:1 |
-  | Unsuited 21 | 10:1 |
-  | Any 20 | 4:1 |
-  | Any 19 | 3:1 |
 
 - **Dealer Buster** — pays out when the dealer busts, scaled by how many
   cards it took. No deck-count restriction, but an 8+ card bust pays out
