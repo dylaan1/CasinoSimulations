@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
-from .cards import Card, Shoe
+from .cards import Card, Shoe, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .rules import Rules
@@ -76,6 +77,22 @@ class Phase(Enum):
     SETTLED = auto()
 
 
+@dataclass
+class ActiveTableRules:
+    """A snapshot of the handful of rules that only take effect at the next
+    shuffle (blackjack payout, dealer soft-17 behavior), captured at the
+    exact moment a shoe is actually cut. session.rules may already hold a
+    newer value the player queued up for the *next* shoe -- this is what
+    the *current* shoe (and the round being played against it) actually
+    uses, so a round never finishes under different rules than it started
+    with, and the UI can show what's really in effect rather than what's
+    merely been typed in. Deck count and penetration don't need their own
+    copy here -- the live Shoe object already carries its own num_decks/
+    penetration, which is exactly this same "as of last cut" snapshot."""
+    blackjack_payout: float
+    hit_soft_17: bool
+
+
 class InsufficientFundsError(Exception):
     def __init__(self, needed: float, available: float):
         super().__init__(f"Need ${needed:,.2f} but only ${available:,.2f} available")
@@ -142,6 +159,7 @@ class GameSession:
         self.stats = stats
         self.shoe = Shoe(rules.num_decks, rules.penetration)
         self._enforce_sidebet_deck_gate()
+        self.active_rules = ActiveTableRules(rules.blackjack_payout, rules.hit_soft_17)
         self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
         self.side_bet_wagers: List[Dict[str, float]] = (
             [dict(d) for d in side_bet_wagers]
@@ -149,7 +167,7 @@ class GameSession:
             else [{key: 0.0 for key in SIDE_BET_KEYS} for _ in range(3)]
         )
         self._quit = False
-        self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession", awaiting a RETURN to confirm
+        self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession" | "bank_reset", awaiting a RETURN to confirm
         self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
 
     def _enforce_sidebet_deck_gate(self) -> None:
@@ -162,6 +180,24 @@ class GameSession:
             rule = getattr(self.rules, key)
             if rule.enabled and not side_bet_allowed(key, self.shoe.num_decks):
                 rule.enabled = False
+
+    def _commit_active_rules(self) -> None:
+        """Snapshot the next-shuffle-only rules as of right now -- called
+        whenever a shoe is actually (re)cut, so the newly active shoe is
+        paired with whatever those rules currently are."""
+        self.active_rules = ActiveTableRules(self.rules.blackjack_payout, self.rules.hit_soft_17)
+
+    @property
+    def has_pending_rule_changes(self) -> bool:
+        """True if any next-shuffle-only rule (deck count, penetration,
+        blackjack payout, dealer soft-17) has been changed since the
+        current shoe was cut, and so differs from what's actually active."""
+        return (
+            self.rules.num_decks != self.shoe.num_decks
+            or abs(self.rules.penetration - self.shoe.penetration) > 1e-9
+            or abs(self.rules.blackjack_payout - self.active_rules.blackjack_payout) > 1e-9
+            or self.rules.hit_soft_17 != self.active_rules.hit_soft_17
+        )
 
     def adjust_bankroll(self, amount: float) -> None:
         self.bankroll += amount
@@ -192,6 +228,7 @@ class GameSession:
         if self.shoe.penetration_reached or self.shoe.cards_remaining < 15:
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
             self._enforce_sidebet_deck_gate()
+            self._commit_active_rules()
             return True
         return False
 
@@ -199,13 +236,26 @@ class GameSession:
         """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
         self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
         self._enforce_sidebet_deck_gate()
+        self._commit_active_rules()
+
+    def reset_bankroll(self) -> None:
+        """Reset the bankroll to its configured default (see 'bank default'),
+        e.g. from the 'bank reset' command. Touches nothing else."""
+        self.bankroll = self.rules.default_bankroll
 
     def reset_session(self) -> None:
-        """Forcibly cut a brand-new shoe, clear session-scoped stats, and
-        reset the bankroll to its configured default (see 'bank default')."""
+        """Forcibly cut a brand-new shoe and clear session-scoped stats.
+        Bankroll is left untouched -- see reset_bankroll()/reset_hard()."""
         self.reset_shoe()
         self.stats.reset_session()
-        self.bankroll = self.rules.default_bankroll
+
+    def reset_hard(self) -> None:
+        """Full reset for 'hardreset': new shoe, session stats, lifetime
+        stats, and the bankroll, all back to their defaults."""
+        self.reset_shoe()
+        self.stats.reset_session()
+        self.stats.reset_lifetime()
+        self.reset_bankroll()
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
         """Set the main wager for a hand slot. Returns an error string, or None on success.
@@ -250,6 +300,17 @@ class Round:
     def __init__(self, session: GameSession):
         self.session = session
         self.rules = session.rules
+
+        # Baselines captured before this round touches anything -- lets the
+        # UI reconstruct "stats/count as of just before this round" for as
+        # long as it needs to stay hidden (see visible_counts() below and
+        # ui.py's _display_stats()), without engine.py needing to know
+        # anything about *why* the UI wants that (settlement banners vs.
+        # progressive card-reveal animation are entirely presentation
+        # concerns -- this just gives it the numbers to work with).
+        self.stats_before = copy.deepcopy(session.stats)
+        self.running_count_before = session.shoe.running_count
+        self.cards_dealt_before = session.shoe.cards_dealt
 
         num_hands = self.rules.num_hands
 
@@ -398,7 +459,14 @@ class Round:
             return
         spot = self.spots[self.play_order[self._prelim_index]]
         if accept:
-            spot.hands[0].surrendered = True
+            # Settles immediately, like a real table and like late surrender
+            # (see perform_action's "surrender" branch) -- half the wager
+            # comes back right away rather than waiting on the rest of the
+            # round, which hasn't even reached the peek yet at this point.
+            hand = spot.hands[0]
+            hand.surrendered = True
+            payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
+            self._record_settlement(spot, hand, outcome, payout)
         self._prelim_index += 1
         self._advance_early_surrender_cursor()
 
@@ -674,7 +742,7 @@ class Round:
         self.dealer_revealed = True
         self.phase = Phase.DEALER_TURN
         self._dealer_draw_iter = play_dealer_hand(
-            self.dealer_hand, self.session.shoe, self.rules.hit_soft_17
+            self.dealer_hand, self.session.shoe, self.session.active_rules.hit_soft_17
         )
 
     def step_dealer(self) -> bool:
@@ -701,7 +769,7 @@ class Round:
         if hand.is_blackjack:
             if dealer_bj:
                 return hand.bet, "push"
-            return hand.bet * (1 + self.rules.blackjack_payout), "player_win"
+            return hand.bet * (1 + self.session.active_rules.blackjack_payout), "player_win"
         if dealer_bj:
             return 0.0, "dealer_win"
         if dealer_bust:
@@ -870,6 +938,65 @@ class Round:
                 self._record_settlement(spot, hand, outcome, payout)
 
         self._settle_buster()
+
+    # ------------------------------------------------------------------
+    # Display support -- Hi-Lo running/true count reveal timing
+    # ------------------------------------------------------------------
+
+    def visible_cards(self, deal_progress: Optional[int] = None) -> List[Card]:
+        """Cards from THIS round the player can currently see, for Hi-Lo
+        purposes -- excludes the dealer's hole card until dealer_revealed,
+        any face-down double/RSA-split card until its hand's double_hidden
+        clears, and, while deal_progress is given (mid initial-deal
+        animation -- a step count into
+        initial_deal_sequence(self.play_order)), any card whose turn in
+        that sequence hasn't actually been shown on screen yet."""
+        if deal_progress is not None:
+            seq = initial_deal_sequence(self.play_order)
+            spot_shown: Dict[int, int] = {}
+            dealer_shown = 0
+            for recipient in seq[:deal_progress]:
+                if recipient is None:
+                    dealer_shown += 1
+                else:
+                    spot_shown[recipient] = spot_shown.get(recipient, 0) + 1
+            cards: List[Card] = []
+            for spot in self.spots:
+                n = spot_shown.get(spot.index, 0)
+                cards.extend(spot.hands[0].cards[:n])
+            if dealer_shown >= 1:
+                # Only the up-card -- the deal sequence's second dealer
+                # card is the hole card, which the deal animation never
+                # reveals on its own (see the dealer_revealed branch below
+                # for when that actually happens).
+                cards.append(self.dealer_hand.cards[0])
+            return cards
+
+        cards: List[Card] = []
+        for spot in self.spots:
+            for hand in spot.hands:
+                cards.extend(hand.cards[:-1] if hand.double_hidden else hand.cards)
+        if self.dealer_revealed:
+            cards.extend(self.dealer_hand.cards)
+        else:
+            cards.append(self.dealer_hand.cards[0])
+        return cards
+
+    def visible_counts(self, deal_progress: Optional[int] = None) -> Tuple[int, float]:
+        """(running_count, true_count) as of only the cards currently
+        visible to the player this round -- layered on top of the shoe's
+        own count as of just before this round began (running_count_
+        before/cards_dealt_before), so a hidden hole card or a still-
+        animating deal never lets the count jump to its final value ahead
+        of the player actually seeing the cards behind it."""
+        visible = self.visible_cards(deal_progress)
+        running = self.running_count_before + sum(hilo_value(c) for c in visible)
+        cards_dealt = self.cards_dealt_before + len(visible)
+        if cards_dealt == 0:
+            return running, 0.0
+        decks_remaining = max(self.session.shoe.total_cards - cards_dealt, 1) / 52
+        true_count = round(running / decks_remaining * 2) / 2
+        return running, true_count
 
     def summary_lines(self) -> List[str]:
         lines = []

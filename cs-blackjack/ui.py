@@ -19,7 +19,9 @@ from .engine import (
     try_start_round,
 )
 from .hand import Hand
+from .rules import format_blackjack_payout
 from .sidebets import side_bet_allowed
+from .stats import Stats
 
 # ---- Card art / hand-stacking geometry ----
 # Only one hand per spot is ever shown at full size (see the "active hand"
@@ -33,6 +35,16 @@ CARD_H = 5
 CARD_W = 7
 FAN_OFFSET = 3  # horizontal step between cards within the row
 MAX_CARDS_IN_GRID = 12  # visual limit; cards beyond this go to the overflow ticker
+
+# The dealer's own 2-card (up-card + hole-card) stack, drawn differently
+# from every other hand -- see draw_dealer_cards(). DX matches FAN_OFFSET
+# so the existing 2-card _card_block_width() math (used to center the
+# dealer's row) needs no special case; DY is the one row the hole card
+# pokes out below the up-card's own footprint, which is why the dealer's
+# card row reserves CARD_BLOCK_HEIGHT + DEALER_STACK_DY, not just
+# CARD_BLOCK_HEIGHT (see CONTENT_HEIGHT below).
+DEALER_STACK_DY = 1
+DEALER_STACK_DX = FAN_OFFSET
 CARD_ROW_WIDTH = CARD_W + FAN_OFFSET * (MAX_CARDS_IN_GRID - 1)
 CARD_BLOCK_HEIGHT = CARD_H
 
@@ -46,7 +58,7 @@ DIVIDER_COLS = NUM_SPOT_COLUMNS - 1  # one reserved column per gap, for the ♦ 
 # prelim-prompt order there, not just this module's own screen layout.
 
 # ---- Wager cell boxes ----
-MAIN_WAGER_BOX_W = 12
+MAIN_WAGER_BOX_W = 13  # matches SIDEBET_BOX_W so the main wager box isn't a column shorter
 SIDEBET_BOX_W = 13  # fits "Power Poker" (11 chars), the longest side-bet title, exactly
 SIDEBET_BOX_GAP = 2
 SIDEBET_GROUP_W = SIDEBET_BOX_W * 3 + SIDEBET_BOX_GAP * 2
@@ -155,7 +167,9 @@ MIN_COLS = max(
 # ---- Vertical content budget ----
 # Rows, top to bottom: title(1) + rules-summary/card-count/bankroll
 # banner(1) + table-status/running-true banner(1) + divider(1) + dealer
-# status(1) + dealer value(1) + dealer cards(CARD_BLOCK_HEIGHT) + chips
+# status(1) + dealer value(1) + dealer cards(CARD_BLOCK_HEIGHT +
+# DEALER_STACK_DY -- the extra row is the hole card's peek, past the
+# up-card's own footprint, while it's still stacked pre-reveal) + chips
 # row(1) + player status(1) + player cards(CARD_BLOCK_HEIGHT) + player
 # overflow-ticker row(1) + active value(1) + buffer(1) + main wager
 # box(3) + main-bet settlement banner row(1) + side-bet boxes(3) (each
@@ -164,7 +178,8 @@ MIN_COLS = max(
 # hint/message(1) + blank(1) + input(1) + blank(1) + divider(1) +
 # stats/payout header(1) + stats/payout rows(STATS_BLOCK_ROWS).
 CONTENT_HEIGHT = (
-    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + 3 + 1 + 3 + 1 + 1
+    1 + 1 + 1 + 1 + 1 + 1 + CARD_BLOCK_HEIGHT + DEALER_STACK_DY
+    + 1 + 1 + CARD_BLOCK_HEIGHT + 1 + 1 + 1 + 3 + 1 + 3 + 1 + 1
     + 1 + 1 + 1 + 1 + 1 + 1 + STATS_BLOCK_ROWS
 )
 # +2 reserves the top/bottom rows of the border frame around the whole
@@ -349,6 +364,30 @@ def _card_block_width(hand: Hand, max_cards: Optional[int] = MAX_CARDS_IN_GRID) 
     return CARD_W + FAN_OFFSET * (n - 1)
 
 
+def draw_dealer_cards(
+    win, base_y: int, x: int, hand: Hand, hide_hole: bool, max_cards: Optional[int] = None,
+) -> None:
+    """The dealer's hand renders differently from every other hand at the
+    table: while the hole card is still hidden (an ordinary 2-card hand,
+    pre-peek/pre-reveal -- including mid-animation, where max_cards caps
+    how many of those 2 cards have actually been "dealt" on screen so
+    far), it's drawn as a stack -- the up-card fully visible on top, the
+    hole card nudged down-and-right just enough to peek out from behind it
+    -- instead of the side-by-side fan every other hand uses. Once
+    revealed (dealer_revealed), or if the dealer somehow already has more
+    than 2 cards while still flagged hidden (shouldn't happen), this falls
+    back to the ordinary fanned row -- covers the dealer's later hits
+    during their own turn, animated exactly as before (draw_hand)."""
+    if hide_hole and len(hand.cards) <= 2:
+        shown = len(hand.cards) if max_cards is None else min(len(hand.cards), max_cards)
+        if shown >= 2:
+            draw_card(win, base_y + DEALER_STACK_DY, x + DEALER_STACK_DX, None, face_down=True)
+        if shown >= 1:
+            draw_card(win, base_y, x, hand.cards[0], face_down=False)
+        return
+    draw_hand(win, base_y, x, hand, hide_hole=hide_hole, max_cards=max_cards)
+
+
 def draw_hand(
     win, base_y: int, x: int, hand: Hand, hide_hole: bool = False, hide_last: bool = False,
     max_cards: Optional[int] = MAX_CARDS_IN_GRID,
@@ -452,11 +491,18 @@ def money(x: float) -> str:
 
 
 def rules_summary(session: GameSession) -> str:
-    r = session.rules
-    soft17 = "HITS" if r.hit_soft_17 else "STANDS"
+    # Every field on this line is next-shuffle-only -- shows the shoe/rules
+    # actually in effect right now (shoe.num_decks/penetration, session.
+    # active_rules), never a change the player has already queued up for
+    # the *next* shoe (session.rules may already differ -- see
+    # GameSession.has_pending_rule_changes and the "* Rule Changes
+    # Pending *" flag drawn alongside this line in render()).
+    shoe = session.shoe
+    active = session.active_rules
+    soft17 = "HITS" if active.hit_soft_17 else "STANDS"
     return (
-        f"{r.num_decks} DECK  •  {r.penetration:.0%}  •  "
-        f"BJ PAYS {r.blackjack_payout_label()}  •  DEALER {soft17} ON SOFT 17"
+        f"{shoe.num_decks} DECK  •  {shoe.penetration:.0%}  •  "
+        f"BJ PAYS {format_blackjack_payout(active.blackjack_payout)}  •  DEALER {soft17} ON SOFT 17"
     )
 
 
@@ -473,8 +519,24 @@ def table_status_summary(session: GameSession) -> str:
     return f"{range_text}  •  {surr}  •  {das}  •  {rsa}"
 
 
-def lifetime_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
-    s = session.stats
+def _display_stats(session: GameSession, round_: Optional[Round], animating: bool = False) -> Stats:
+    """The Stats snapshot to actually show on screen -- session.stats
+    itself whenever it's safe to reveal (no round in progress, or the
+    active round has fully settled AND the deal animation isn't still
+    playing), otherwise round_.stats_before, a snapshot frozen from just
+    before the round began. Without this, a sharp player could read
+    outcomes (an immediate blackjack, a side bet win) off the stats
+    panel's numbers ticking up before the deal animation or settlement
+    banners ever reveal them -- the `animating` check matters on its own
+    here: a single-hand round with an instant blackjack against a non-peek
+    up-card fully settles (Phase.SETTLED) inside Round.__init__, well
+    before _animate_deal even starts, so phase alone isn't enough."""
+    if round_ is None or (round_.phase == Phase.SETTLED and not animating):
+        return session.stats
+    return round_.stats_before
+
+
+def lifetime_stats_rows(s: Stats) -> List[Tuple[str, str]]:
     ev = s.ev_percent()
     sign_main = "+" if s.lifetime_main_pl >= 0 else ""
     sign_side = "+" if s.lifetime_sidebet_pl >= 0 else ""
@@ -493,8 +555,7 @@ def lifetime_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
     ]
 
 
-def session_stats_rows(session: GameSession) -> List[Tuple[str, str]]:
-    s = session.stats
+def session_stats_rows(s: Stats) -> List[Tuple[str, str]]:
     sign_main = "+" if s.session_main_pl >= 0 else ""
     sign_side = "+" if s.session_sidebet_pl >= 0 else ""
     return [
@@ -983,6 +1044,10 @@ def render(
     cards_dealt_text = f"Cards Left: {shoe.cards_remaining}({shoe.cards_dealt})"
     _safe_addstr(win, y, left_margin, cards_dealt_text, curses.color_pair(4) | curses.A_BOLD)
     cell_rects["cards_dealt"] = (y, left_margin, 1, len(cards_dealt_text))
+    if session.has_pending_rule_changes:
+        pending_text = "* Rule Changes Pending *"
+        pending_x = left_margin + len(cards_dealt_text) + 2
+        _safe_addstr(win, y, pending_x, pending_text, curses.color_pair(4) | curses.A_BOLD)
     bankroll_text = f"Bankroll: {money(session.bankroll)}"
     bankroll_x = max(left_margin, right_edge - len(bankroll_text))
     _safe_addstr(win, y, bankroll_x, bankroll_text, curses.color_pair(4) | curses.A_BOLD)
@@ -991,8 +1056,13 @@ def render(
 
     status_line = table_status_summary(session)
     _draw_filled_banner(win, y, left_margin, usable_width, status_line, curses.color_pair(5) | curses.A_BOLD)
-    counts_text = f"Running: {shoe.running_count:+d}   True: {shoe.true_count:+.1f}"
-    _safe_addstr(win, y, left_margin, counts_text, curses.color_pair(5) | curses.A_BOLD)
+    if session.rules.show_hilo:
+        if round_ is not None:
+            running_count, true_count = round_.visible_counts(deal_progress)
+        else:
+            running_count, true_count = shoe.running_count, shoe.true_count
+        counts_text = f"Running: {running_count:+d}   True: {true_count:+.1f}"
+        _safe_addstr(win, y, left_margin, counts_text, curses.color_pair(5) | curses.A_BOLD)
     y += 1
 
     _safe_addstr(win, y, left_margin, "-" * max(usable_width, 0))
@@ -1026,10 +1096,10 @@ def render(
             # already resolved (e.g. an instant dealer blackjack) before
             # the animation even started -- the hole card only appears at
             # its own step in the sequence, never sooner.
-            draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=True, max_cards=dealer_reveal)
+            draw_dealer_cards(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=True, max_cards=dealer_reveal)
         else:
-            draw_hand(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
-    y += CARD_BLOCK_HEIGHT
+            draw_dealer_cards(win, dealer_cards_base_y, dealer_x, dealer_hand, hide_hole=hide_hole, max_cards=None)
+    y += CARD_BLOCK_HEIGHT + DEALER_STACK_DY
 
     # ---- PLAYER: collapsed chips for any already-completed split hands
     # (above the cards, where they've always been) -> status -> cards ->
@@ -1190,8 +1260,9 @@ def render(
     for dy in range(STATS_BLOCK_ROWS + 1):
         _safe_addstr(win, stats_y + dy, divider_x, "│", curses.A_DIM)
 
-    session_rows = session_stats_rows(session)
-    life_rows = lifetime_stats_rows(session)
+    display_stats = _display_stats(session, round_, animating)
+    session_rows = session_stats_rows(display_stats)
+    life_rows = lifetime_stats_rows(display_stats)
     sess_a, sess_b = session_rows[:STATS_SESSION_ROWS], session_rows[STATS_SESSION_ROWS:]
     life_a, life_b = life_rows[:STATS_LIFETIME_ROWS], life_rows[STATS_LIFETIME_ROWS:]
 
@@ -1257,13 +1328,15 @@ def render_help_screen(stdscr) -> None:
 
 def render_gamerules_screen(stdscr, session: GameSession) -> None:
     r = session.rules
+    shoe = session.shoe
+    active = session.active_rules
     table_range = f"${r.table_min:,.0f}-${r.table_max:,.0f}" if r.table_min > 0 else f"${r.table_max:,.0f} max"
     lines = [
         "GAME RULES",
-        f"  Decks:               {r.num_decks}",
-        f"  Penetration:         {r.penetration:.0%}",
-        f"  Blackjack pays:      {r.blackjack_payout_label()}",
-        f"  Dealer Soft 17:      {'Hits' if r.hit_soft_17 else 'Stands'}",
+        f"  Decks:               {shoe.num_decks}",
+        f"  Penetration:         {shoe.penetration:.0%}",
+        f"  Blackjack pays:      {format_blackjack_payout(active.blackjack_payout)}",
+        f"  Dealer Soft 17:      {'Hits' if active.hit_soft_17 else 'Stands'}",
         f"  Double After Split:  {'ON' if r.das else 'OFF'}",
         f"  Resplit Aces:        {('ON (max ' + str(r.rsa_max_hands) + ' hands)') if r.rsa else 'OFF'}",
         f"  RSA Facedown:        {'ON' if r.rsa_facedown else 'OFF'}",
@@ -1272,6 +1345,11 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         f"  Table Limits:        {table_range}",
         f"  Double Facedown:     {'ON' if r.double_facedown else 'OFF'}",
         f"  Double Blackjack:    {'ON' if r.double_blackjack else 'OFF'}",
+        f"  Hi-Lo Count Shown:   {'ON' if r.show_hilo else 'OFF'}",
+    ]
+    if session.has_pending_rule_changes:
+        lines.append("  * Rule Changes Pending -- takes effect at the next shuffle *")
+    lines += [
         "",
         "SIDE BETS",
     ]
@@ -1296,13 +1374,14 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
     _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
 
 
-def render_stats_screen(stdscr, session: GameSession) -> None:
+def render_stats_screen(stdscr, session: GameSession, round_: Optional[Round]) -> None:
+    display_stats = _display_stats(session, round_)
     lines: List[str] = ["LIFETIME STATS"]
-    for label, value in lifetime_stats_rows(session):
+    for label, value in lifetime_stats_rows(display_stats):
         lines.append(f"  {label:<18}{value:>12}")
     lines.append("")
     lines.append("SESSION STATS")
-    for label, value in session_stats_rows(session):
+    for label, value in session_stats_rows(display_stats):
         lines.append(f"  {label:<18}{value:>12}")
     _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
 
@@ -1493,8 +1572,7 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
             return "Hard reset cancelled."
         if round_ is not None:
             return "Finish the current round before hard-resetting."
-        session.stats.reset_lifetime()
-        session.reset_session()
+        session.reset_hard()
         _blink_new_shoe(stdscr, session, None)
         return "Lifetime stats reset. New shoe shuffled in; session stats and bankroll reset."
     if stripped in ("help", "?"):
@@ -1507,7 +1585,7 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
         render_betspread_screen(stdscr)
         return ""
     if stripped == "stats":
-        render_stats_screen(stdscr, session)
+        render_stats_screen(stdscr, session, round_)
         return ""
     return commands.handle_command(raw, session)
 
@@ -1627,13 +1705,25 @@ def _main(stdscr) -> None:
                         commit_bet_cell()
                         bet_row, bet_col = hit
                         input_focus = "wager"
+                    else:
+                        # Clicked somewhere that isn't a wager cell, a
+                        # side-bet cell, or the CLI line -- unhighlight
+                        # everything rather than leaving the previous
+                        # selection lit for no reason. Clicking a real cell
+                        # (or arrow-navigating, or '/') re-highlights as
+                        # normal afterward.
+                        commit_bet_cell()
+                        input_focus = "none"
                 continue
 
             if session.pending_confirmation:
                 kind = session.pending_confirmation
                 session.pending_confirmation = None
                 if ch in RETURN_KEYS:
-                    if round_ is not None:
+                    if kind == "bank_reset":
+                        session.reset_bankroll()
+                        message = f"Bankroll reset to ${session.rules.default_bankroll:,.2f}."
+                    elif round_ is not None:
                         message = "Finish the current round before resetting the shoe."
                     elif kind == "newshoe":
                         session.reset_shoe()
@@ -1828,7 +1918,12 @@ def _main(stdscr) -> None:
                 bet_edit_buffer = ""
                 input_focus = "wager"
                 continue
-            if 32 <= ch < 127 and not (ch == 32 and buffer == ""):
+            if input_focus == "cli" and 32 <= ch < 127 and not (ch == 32 and buffer == ""):
+                # Only append into the command buffer while the CLI is
+                # actually focused ('/' or a click on it) -- otherwise a
+                # stray keystroke (e.g. mashed mid-round, or before
+                # anything's been focused at all) must never silently
+                # start building a command behind the player's back.
                 buffer += chr(ch)
                 continue
     finally:
