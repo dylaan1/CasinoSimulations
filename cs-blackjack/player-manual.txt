@@ -1,4 +1,4 @@
-Blackjack
+# Blackjack
 A full-screen, terminal-based blackjack game built for practicing real-money play, card counting, and casino-accurate table procedure. It runs in a curses TUI, deals against a configurable multi-deck shoe, mimics the order and timing of a real table (dealing, prompts, and settlement all proceed rightmost-spot-first, one card/decision at a time), and tracks a live Hi-Lo running/true count so you can rehearse bet-spread strategy against a realistic table.
 
 Highlights
