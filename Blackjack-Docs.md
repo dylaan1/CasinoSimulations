@@ -181,7 +181,7 @@ stats bar, its own themed wager cell, and its own min/max bet:
   cards it took. No deck-count restriction, but an 8+ card bust pays out
   higher on a single-deck shoe:
 
-  | Cards to bust | Pays (2+ decks) | Pays (exactly 1 deck) |
+  | # of Cards | Payout (2+ decks) | Payout (Single Deck) |
   |---|---|---|
   | 3 | 2:1 | 2:1 |
   | 4 | 3:1 | 3:1 |
