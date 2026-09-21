@@ -1629,18 +1629,20 @@ def _animate_deal(stdscr, session: GameSession, round_: Round) -> None:
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
     dealer_bust_announced = False
     while round_ is not None and round_.phase == Phase.DEALER_TURN:
-        if round_.dealer_hand.is_bust and not dealer_bust_announced:
-            # Fires the same iteration the busting card first renders --
-            # the card that tipped the dealer over 21 was drawn at the end
-            # of the *previous* iteration's step_dealer() call, so this is
-            # the first render where the bust is actually visible.
-            sound.play(sound.BUST)
-            dealer_bust_announced = True
-        render(stdscr, session, round_, "", "Dealer is drawing...")
         # Covers both the dealer's hole card turning face up (the loop's
         # first pass, even when the dealer draws no further cards at all)
-        # and each additional hit card after it.
-        sound.play(sound.CARD_DEAL)
+        # and each additional hit card after it. No separate bust-sound
+        # for the dealer -- this render is the first one showing the bust
+        # (the busting card was actually drawn at the end of the *previous*
+        # iteration's step_dealer() call), so that one card-deal just plays
+        # a bit louder instead; the player-hand win sound that follows
+        # shortly already carries the "something happened" cue.
+        if round_.dealer_hand.is_bust and not dealer_bust_announced:
+            sound.play(sound.CARD_DEAL, volume=sound.DEALER_BUST_CARD_VOLUME)
+            dealer_bust_announced = True
+        else:
+            sound.play(sound.CARD_DEAL)
+        render(stdscr, session, round_, "", "Dealer is drawing...")
         curses.napms(450)
         round_.step_dealer()
     if round_ is not None and round_.phase == Phase.REVEAL:
@@ -1728,9 +1730,10 @@ def _main(stdscr) -> None:
     # slices is new).
     sound_side_bets_announced = 0
     sound_results_announced = 0
+    sound_dealer_bj_announced = False
 
     def announce_new_settlement_sounds() -> None:
-        nonlocal sound_side_bets_announced, sound_results_announced
+        nonlocal sound_side_bets_announced, sound_results_announced, sound_dealer_bj_announced
         if round_ is None:
             return
         for result in round_.side_bet_results[sound_side_bets_announced:]:
@@ -1739,11 +1742,19 @@ def _main(stdscr) -> None:
         sound_side_bets_announced = len(round_.side_bet_results)
         # A player hand that busted on a hit or a face-up double (a
         # face-down double is always bust-proof by design -- see
-        # _apply_double) settles immediately, same as here.
+        # _apply_double) settles immediately, same as here -- and so does a
+        # doubled hand that loses without busting (twice the money lost is
+        # still worth the same sting).
         for result in round_.results[sound_results_announced:]:
-            if result.hand.is_bust:
+            if result.hand.is_bust or (result.hand.doubled and result.outcome == "dealer_win"):
                 sound.play(sound.BUST)
         sound_results_announced = len(round_.results)
+        # Fires once per round, the instant the peek confirms the dealer's
+        # blackjack -- independent of what any individual spot does with it
+        # (push, loss, or even money accepted all still get this).
+        if round_.dealer_has_blackjack and not sound_dealer_bj_announced:
+            sound.play(sound.BUST)
+            sound_dealer_bj_announced = True
 
     bet_row = 0
     bet_col = 0
@@ -1916,7 +1927,15 @@ def _main(stdscr) -> None:
                 handled = True
                 if ch in (ord("d"), ord("D")):
                     message = ""
+                    # respond_double_blackjack silently no-ops (no card
+                    # drawn) if the double turns out to be unaffordable --
+                    # capture the hand first so the sound only fires when
+                    # a card is actually dealt.
+                    prelim_spot = round_.current_prelim_spot()
+                    prelim_hand = prelim_spot.hands[0] if prelim_spot else None
                     round_.respond_double_blackjack(True)
+                    if prelim_hand is not None and prelim_hand.doubled:
+                        sound.play(sound.CARD_DEAL)
                 elif ch in RETURN_KEYS:
                     message = ""
                     round_.respond_double_blackjack(False)
@@ -1948,6 +1967,16 @@ def _main(stdscr) -> None:
                     if err:
                         message = err
                     else:
+                        # A card is actually dealt for hit (1) and double
+                        # (1); a split deals one to *each* of the two
+                        # resulting hands (2) -- the sound is tied to the
+                        # cards landing, not to the split action itself.
+                        # Stand/surrender deal nothing, so stay silent.
+                        if action in ("hit", "double"):
+                            sound.play(sound.CARD_DEAL)
+                        elif action == "split":
+                            sound.play(sound.CARD_DEAL)
+                            sound.play(sound.CARD_DEAL)
                         msg = _after_engine_change(round_, session, stdscr)
                         if msg is not None:
                             message = msg
@@ -2047,6 +2076,7 @@ def _main(stdscr) -> None:
                         round_ = new_round
                         sound_side_bets_announced = 0  # fresh round -- nothing announced yet
                         sound_results_announced = 0
+                        sound_dealer_bj_announced = False
                         message = ""
                         curses.flushinp()  # a queued key shouldn't fire mid-animation as an early action
                         _animate_deal(stdscr, session, round_)
