@@ -44,7 +44,16 @@ realistic table.
   Even Money?/Double? prompt when one applies) directly below the cards,
   no gap — the main settlement banner — the wager box — the side-bet
   boxes — the side-bet banner. The rare 13+-card overflow ticker moved
-  down below the side-bet banner, out of the way of the main flow.
+  down below the side-bet banner, out of the way of the main flow. A
+  split-ace spot is the one exception to the "collapsed values above the
+  cards" convention above: since every ace-split hand is shown in full at
+  once (see **Multi-hand play & splits** below), each hand's own value
+  sits directly below its own cards, the same relative spot every other
+  hand's value occupies — never collapsed above.
+- **Two dashed dividers close out the table**, splitting the screen into
+  three clear sections stacked top to bottom: the table itself (dealer,
+  spots, wagers, side bets), then the command-line section (the
+  hint/message line and the input line), then the stats/payout panel.
 
 **Configurable table rules** (all changeable live via commands, no restart
 required)
@@ -89,7 +98,11 @@ double options, side bets) applies immediately.
   hands actually had twice the money riding on it.
 - **Split aces** always stand on the single hard total they're actually
   standing on once resolved — a hand that drew a ten-value card after
-  splitting aces shows "\*21\*", never a lingering soft "\*11/21\*".
+  splitting aces shows "\*21\*", never a lingering soft "\*11/21\*". Every
+  ace-split hand (up to 4, with RSA) is shown in full at once, each in its
+  own equal slice of the spot's column, its value directly below its own
+  cards — never collapsed into the above-the-cards chip row non-ace splits
+  use.
 
 **Player actions**
 
@@ -148,7 +161,11 @@ all at once at the end of the round:
 **Side bets**
 
 Three optional side bets, each with its own paytable shown live in the
-stats bar, its own themed wager cell, and its own min/max bet:
+stats bar, its own themed wager cell, and its own min/max bet. Every
+payout figure below is just the shipped default — any of them can be
+adjusted live via `powerpoker`/`star21`/`buster <category> <payout>` (see
+**Command reference**), and the inline paytable updates immediately to
+match, no restart needed.
 
 - **Power Poker** — your first two cards plus the dealer's up-card, scored
   as a 3-card poker hand:
@@ -257,12 +274,28 @@ sound beyond the ordinary card-deal ones.
 
 **Bankroll and statistics**
 
-- A **lifetime** panel (main-bet P/L $, side-bet P/L $, EV % on main
-  wagers, hands played, wins/losses/pushes/surrenders, 8+ card dealer
-  busts, and Star 21 7-7-7♦ hits) and a **session** panel (bankroll,
-  main/side-bet P/L $, hands played, wins/losses/pushes, surrenders,
-  doubles, splits, and blackjacks dealt this session). Both are saved to
-  disk automatically.
+- A **lifetime** panel and a **session** panel, both saved to disk
+  automatically. The Main UI shows an abridged Lifetime block (its main
+  P/L/hands/outcome figures, plus 3 highlighted category counters: Suited
+  7-7-7♦, Royal Flushes, and 8+ Card Busts) and the full Session block;
+  the full-screen `stats` command shows every figure in both, unabridged.
+- **Lifetime**: EV % (on main wagers only), total lifetime/main-bet/
+  side-bet P/L $, Power Poker P/L $, Star 21 P/L $, sessions played, total
+  hands dealt, wins/losses/pushes/surrenders — plus, for every payout
+  category across all three side bets (Power Poker's 5, Star 21's 9,
+  Dealer Buster's 6), how many times it's actually occurred, regardless of
+  whether it was wagered on that round. That per-category occurrence data
+  exists to help gauge whether a payout (adjustable live — see **Side
+  bets**) is priced the way you want it, not just to show off a big
+  number. "Most Cards for Dealer Bust" has no lifetime equivalent (it
+  resets every session) and always reads "–" in this panel.
+- **Session**: player/dealer wins, pushes, surrenders, doubles, splits,
+  Greg Specials (the dealer hitting to a non-blackjack 21), player/dealer
+  blackjacks, shoes played, hands dealt, session/main/side-bet P/L $,
+  aces split (the number of times you split a pair of aces, not the
+  number of aces involved), tens split (same, for ten-value pairs),
+  dealer busts, and the most cards any one of this session's dealer busts
+  took.
 - Both panels hold their pre-round numbers for the whole round and only
   catch up to the real values once it's fully settled — even though some
   outcomes (an immediate blackjack, a side bet win) are internally decided
@@ -329,7 +362,7 @@ tables — all one keypress away, no need to memorize anything up front.
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **198x48** — it will refuse to
+  escape sequence on launch) and is at least **193x49** — it will refuse to
   draw the table and show a "too small" message below that size
 
 No third-party packages are required to run the game itself.
@@ -417,6 +450,15 @@ and reloaded automatically the next time you launch.
 | `powerpoker on/off [minbet N] [maxbet N]` | Requires 3+ decks in the live shoe |
 | `star21 on/off [minbet N] [maxbet N]` | Requires 2+ decks (2 decks uses its own paytable) |
 | `buster on/off [minbet N] [maxbet N]` | No deck restriction; single deck pays 500:1 on an 8+ card bust |
+| `powerpoker <category> <payout>` | Adjust a Power Poker payout, e.g. `powerpoker royalflush 60` |
+| `star21 <category> <payout>` | Adjust a Star 21 payout, e.g. `star21 suited777d 3000` or `star21 unsuited21 9` |
+| `buster <category> <payout>` | Adjust a Dealer Buster payout, e.g. `buster 8+ 300` or `buster 7 50` |
+
+A payout change applies to every table variant that shares that category
+key — e.g. `star21 unsuited21 9` updates both the standard and the
+double-deck Star 21 tables at once, so the odds stay consistent
+regardless of how the deck count changes later. Payouts persist to disk
+like everything else, so they carry over between sessions.
 
 **Shoe / session**
 

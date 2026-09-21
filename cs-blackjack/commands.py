@@ -42,6 +42,9 @@ HELP_LINES = [
     "  powerpoker on/off [minbet N] [maxbet N]   Requires 3+ decks in the shoe",
     "  star21 on/off [minbet N] [maxbet N]       Requires 2+ decks (2 decks uses its own paytable)",
     "  buster on/off [minbet N] [maxbet N]       No deck restriction; single deck pays 500:1 on 8+ cards",
+    "  powerpoker <category> <payout>            Adjust a payout, e.g. 'powerpoker royalflush 60'",
+    "  star21 <category> <payout>                e.g. 'star21 suited777d 3000' or 'star21 unsuited21 9'",
+    "  buster <category> <payout>                e.g. 'buster 8+ 300' or 'buster 7 50'",
     "",
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
@@ -242,6 +245,8 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         return f"Playing {n} hand(s) per round"
 
     if head in ("powerpoker", "star21", "buster"):
+        if rest and rest[0] not in ("on", "off"):
+            return _sidebet_payout_command(head, rest, session)
         return _sidebet_toggle(head, rest, session)
 
     if head == "newshoe":
@@ -345,3 +350,36 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
         f"{label}: {'ON' if target.enabled else 'OFF'} "
         f"(min ${target.min_bet:,.2f}, max ${target.max_bet:,.2f})"
     )
+
+
+def _sidebet_payout_command(head: str, rest: List[str], session: "GameSession") -> str:
+    """'<sidebet> <category> <payout>' -- adjusts a specific payout
+    category's odds live, e.g. 'star21 suited777d 3000' (7-7-7 diamonds
+    now pays 3000:1) or 'buster 8+ 300'. Applies to every table variant
+    for that side bet which actually has the category (e.g. Star 21's
+    double-deck table has no 7-7-7 categories at all, so a 7-7-7 key only
+    ever touches the standard table; a key both tables share, like
+    'unsuited21', updates both, so the payout stays consistent regardless
+    of how many decks happen to be in the shoe later)."""
+    bet_key = {"powerpoker": "power_poker", "star21": "star21", "buster": "dealer_buster"}[head]
+    label = _SIDEBET_LABELS[bet_key]
+    usage = f"Usage: {head} <category> <payout>"
+    category_key = rest[0]
+    payout = _parse_float(_require(rest, 1, usage), "payout")
+    if payout <= 0:
+        raise CommandError("payout must be positive")
+
+    if bet_key == "power_poker":
+        table_keys = ["power_poker"]
+    elif bet_key == "star21":
+        table_keys = ["star21_standard", "star21_double"]
+    else:
+        table_keys = ["buster_multi", "buster_single"]
+
+    touched = [tk for tk in table_keys if category_key in session.rules.payouts[tk]]
+    if not touched:
+        valid = sorted({k for tk in table_keys for k in session.rules.payouts[tk]})
+        raise CommandError(f"Unknown {label} category '{category_key}'. Valid categories: {', '.join(valid)}")
+    for tk in touched:
+        session.rules.payouts[tk][category_key] = payout
+    return f"{label} '{category_key}' now pays {payout:g}:1"

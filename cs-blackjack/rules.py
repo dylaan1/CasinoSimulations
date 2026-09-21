@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from typing import Dict
+
+from .sidebets import default_payouts
 
 
 def format_blackjack_payout(payout: float) -> str:
@@ -40,6 +43,12 @@ class Rules:
     star21: SideBetRules = field(default_factory=SideBetRules)
     dealer_buster: SideBetRules = field(default_factory=SideBetRules)
 
+    # Every side bet's payout odds, adjustable live via e.g. "star21
+    # suited777d 3000" or "buster 8+ 300" -- see sidebets.default_payouts()
+    # for the shape (table key -> {category key -> multiplier}) and
+    # commands._sidebet_payout_command for the command itself.
+    payouts: Dict[str, Dict[str, float]] = field(default_factory=default_payouts)
+
     @property
     def surrender_late(self) -> bool:
         return self.surrender == "late"
@@ -61,10 +70,25 @@ class Rules:
         pp = data.pop("power_poker", None) or {}
         s21 = data.pop("star21", None) or {}
         buster = data.pop("dealer_buster", None) or {}
+        saved_payouts = data.pop("payouts", None) or {}
         rules = cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
         rules.power_poker = SideBetRules(**pp) if pp else SideBetRules()
         rules.star21 = SideBetRules(**s21) if s21 else SideBetRules()
         rules.dealer_buster = SideBetRules(**buster) if buster else SideBetRules()
+        # Merge onto a fresh set of defaults rather than trusting the saved
+        # dict's own shape -- an older save file (or one saved before a new
+        # payout category existed) may be missing whole tables or keys, and
+        # the evaluators index into these dicts directly with no fallback.
+        merged = default_payouts()
+        for table, rows in saved_payouts.items():
+            if table in merged and isinstance(rows, dict):
+                for key, value in rows.items():
+                    if key in merged[table]:
+                        try:
+                            merged[table][key] = float(value)
+                        except (TypeError, ValueError):
+                            pass
+        rules.payouts = merged
         return rules
 
     def blackjack_payout_label(self) -> str:

@@ -5,16 +5,18 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
-from .cards import Card, Shoe, hilo_value
+from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .rules import Rules
 from .sidebets import (
+    buster_table_key,
     evaluate_dealer_buster,
     evaluate_power_poker,
     evaluate_star21,
     evaluate_star21_double_deck,
     side_bet_allowed,
+    star21_table_key,
 )
 from .stats import Stats
 
@@ -229,6 +231,7 @@ class GameSession:
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
             self._enforce_sidebet_deck_gate()
             self._commit_active_rules()
+            self.stats.record_shoe_cut()
             return True
         return False
 
@@ -237,6 +240,7 @@ class GameSession:
         self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
         self._enforce_sidebet_deck_gate()
         self._commit_active_rules()
+        self.stats.record_shoe_cut()
 
     def reset_bankroll(self) -> None:
         """Reset the bankroll to its configured default (see 'bank default'),
@@ -695,6 +699,10 @@ class Round:
             new_hand.double_hidden = True
         spot.hands.insert(self._current_hand_index + 1, new_hand)
         self.session.stats.record_split()
+        if is_aces:
+            self.session.stats.record_aces_split()
+        elif kept.rank in TEN_VALUE_RANKS:
+            self.session.stats.record_tens_split()
 
     def _advance_player_cursor(self) -> None:
         while self._play_cursor < len(self.play_order):
@@ -872,24 +880,25 @@ class Round:
         only key off the spot's first two cards and the dealer's up card,
         already fully known the moment dealing finishes, well before any
         early-surrender/insurance decision or player action."""
-        star21_fn = evaluate_star21_double_deck if self.session.shoe.num_decks == 2 else evaluate_star21
+        star21_table = star21_table_key(self.session.shoe.num_decks)
+        star21_fn = evaluate_star21_double_deck if star21_table == "star21_double" else evaluate_star21
         evaluators = {
-            "power_poker": (SIDE_BET_LABELS["power_poker"], evaluate_power_poker),
-            "star21": (SIDE_BET_LABELS["star21"], star21_fn),
+            "power_poker": (SIDE_BET_LABELS["power_poker"], evaluate_power_poker, self.rules.payouts["power_poker"]),
+            "star21": (SIDE_BET_LABELS["star21"], star21_fn, self.rules.payouts[star21_table]),
         }
         for spot in self.spots:
             player_cards = spot.side_bet_snapshot
-            for key, (name, fn) in evaluators.items():
+            for key, (name, fn, payouts) in evaluators.items():
                 # Evaluated regardless of whether it was actually wagered --
-                # some outcomes (like the Star 21 7-7-7 diamonds hit) are
-                # tracked in lifetime stats purely as an event, independent
-                # of the side bet's own win/loss bookkeeping below.
-                outcome = fn(player_cards, self.dealer_up)
-                label, multiplier = outcome if outcome else (None, 0.0)
-                if key == "star21" and label == "Suited 7-7-7 Diamonds":
-                    self.session.stats.record_blazing_seven()
-                if key == "power_poker" and label == "Royal Flush":
-                    self.session.stats.record_royal_flush()
+                # every category's occurrence is tracked in lifetime stats
+                # purely as an event (to inform future payout tuning),
+                # independent of the side bet's own win/loss bookkeeping.
+                outcome = fn(player_cards, self.dealer_up, payouts)
+                if outcome:
+                    category_key, label, multiplier = outcome
+                    self.session.stats.record_sidebet_occurrence(key, category_key)
+                else:
+                    label, multiplier = None, 0.0
 
                 wager = spot.side_bet_wagers.get(key, 0.0)
                 if wager <= 0:
@@ -897,7 +906,7 @@ class Round:
                 win = wager * (1 + multiplier) if outcome else 0.0
                 if win:
                     self.session.adjust_bankroll(win)
-                self.session.stats.record_side_bet(wager, win)
+                self.session.stats.record_side_bet(wager, win, bet_key=key)
                 self.side_bet_results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
     def _settle_insurance(self) -> None:
@@ -918,13 +927,21 @@ class Round:
     def _settle_buster(self) -> None:
         """Dealer Buster can't resolve until the dealer's hand is fully
         played out, so -- unlike Power Poker and Star 21 -- it settles
-        alongside the final main-wager settlement, not right after the deal."""
+        alongside the final main-wager settlement, not right after the deal.
+        The outcome itself is the same for every spot (it's purely about
+        the dealer's one hand), so it's evaluated -- and its occurrence
+        recorded -- exactly once per round, not once per spot."""
+        payouts = self.rules.payouts[buster_table_key(self.session.shoe.num_decks)]
+        outcome = evaluate_dealer_buster(self.dealer_hand, payouts)
+        if outcome:
+            category_key, label, multiplier = outcome
+            self.session.stats.record_sidebet_occurrence("dealer_buster", category_key)
+        else:
+            label, multiplier = None, 0.0
         for spot in self.spots:
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
             if buster_wager <= 0:
                 continue
-            outcome = evaluate_dealer_buster(self.dealer_hand, self.session.shoe.num_decks)
-            label, multiplier = outcome if outcome else (None, 0.0)
             win = buster_wager * (1 + multiplier) if outcome else 0.0
             if win:
                 self.session.adjust_bankroll(win)
@@ -940,8 +957,12 @@ class Round:
 
         if dealer_bj:
             self.session.stats.record_dealer_blackjack()
-        if dealer_bust and len(self.dealer_hand.cards) >= 8:
-            self.session.stats.record_dealer_bust_8plus()
+        elif not dealer_bust and dealer_value == 21:
+            # "Greg Special" -- the dealer hit their way up to 21 rather
+            # than being dealt it outright.
+            self.session.stats.record_greg_special()
+        if dealer_bust:
+            self.session.stats.record_dealer_bust(len(self.dealer_hand.cards))
 
         for spot in self.spots:
             for hand in spot.hands:
