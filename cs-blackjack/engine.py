@@ -8,7 +8,13 @@ from .cards import Card, Shoe
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .rules import Rules
-from .sidebets import evaluate_dealer_buster, evaluate_power_poker, evaluate_star21
+from .sidebets import (
+    evaluate_dealer_buster,
+    evaluate_power_poker,
+    evaluate_star21,
+    evaluate_star21_double_deck,
+    side_bet_allowed,
+)
 from .stats import Stats
 
 OUTCOME_LABELS = {
@@ -135,6 +141,7 @@ class GameSession:
         self.bankroll = bankroll
         self.stats = stats
         self.shoe = Shoe(rules.num_decks, rules.penetration)
+        self._enforce_sidebet_deck_gate()
         self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
         self.side_bet_wagers: List[Dict[str, float]] = (
             [dict(d) for d in side_bet_wagers]
@@ -144,6 +151,17 @@ class GameSession:
         self._quit = False
         self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession", awaiting a RETURN to confirm
         self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
+
+    def _enforce_sidebet_deck_gate(self) -> None:
+        """Power Poker (3+ decks) and Star21 (2+ decks) are firmly disabled
+        below their deck-count floor -- called right after (re)cutting the
+        shoe so a rule flag left ON from a higher deck count (or loaded from
+        a stale persisted session) can't silently stay enabled against a
+        shoe that no longer supports it. Dealer Buster has no such floor."""
+        for key in ("power_poker", "star21"):
+            rule = getattr(self.rules, key)
+            if rule.enabled and not side_bet_allowed(key, self.shoe.num_decks):
+                rule.enabled = False
 
     def adjust_bankroll(self, amount: float) -> None:
         self.bankroll += amount
@@ -173,12 +191,14 @@ class GameSession:
         """
         if self.shoe.penetration_reached or self.shoe.cards_remaining < 15:
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
+            self._enforce_sidebet_deck_gate()
             return True
         return False
 
     def reset_shoe(self) -> None:
         """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
         self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
+        self._enforce_sidebet_deck_gate()
 
     def reset_session(self) -> None:
         """Forcibly cut a brand-new shoe, clear session-scoped stats, and
@@ -250,7 +270,12 @@ class Round:
             sb: Dict[str, float] = {}
             for key in SIDE_BET_KEYS:
                 side_rule = getattr(self.rules, key)
-                amt = session.side_bet_wagers[i].get(key, 0.0) if side_rule.enabled else 0.0
+                # side_bet_allowed() is a belt-and-suspenders check against
+                # the *live* shoe -- _enforce_sidebet_deck_gate() already
+                # keeps side_rule.enabled in sync whenever the shoe is cut,
+                # so this should never actually differ in practice.
+                available = side_rule.enabled and side_bet_allowed(key, session.shoe.num_decks)
+                amt = session.side_bet_wagers[i].get(key, 0.0) if available else 0.0
                 if amt > side_rule.max_bet:
                     amt = side_rule.max_bet
                 if 0 < amt < side_rule.min_bet:
@@ -762,9 +787,10 @@ class Round:
         only key off the spot's first two cards and the dealer's up card,
         already fully known the moment dealing finishes, well before any
         early-surrender/insurance decision or player action."""
+        star21_fn = evaluate_star21_double_deck if self.session.shoe.num_decks == 2 else evaluate_star21
         evaluators = {
             "power_poker": (SIDE_BET_LABELS["power_poker"], evaluate_power_poker),
-            "star21": (SIDE_BET_LABELS["star21"], evaluate_star21),
+            "star21": (SIDE_BET_LABELS["star21"], star21_fn),
         }
         for spot in self.spots:
             player_cards = spot.side_bet_snapshot
@@ -812,7 +838,7 @@ class Round:
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
             if buster_wager <= 0:
                 continue
-            outcome = evaluate_dealer_buster(self.dealer_hand)
+            outcome = evaluate_dealer_buster(self.dealer_hand, self.session.shoe.num_decks)
             label, multiplier = outcome if outcome else (None, 0.0)
             win = buster_wager * (1 + multiplier) if outcome else 0.0
             if win:

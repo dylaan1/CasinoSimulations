@@ -3,6 +3,8 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING, List
 
+from .sidebets import side_bet_allowed
+
 if TYPE_CHECKING:  # pragma: no cover
     from .engine import GameSession
 
@@ -35,9 +37,9 @@ HELP_LINES = [
     "  hands 1-3                      Simultaneous hands to play",
     "",
     "SIDE BETS",
-    "  powerpoker on/off [minbet N] [maxbet N]",
-    "  star21 on/off [minbet N] [maxbet N]",
-    "  buster on/off [minbet N] [maxbet N]",
+    "  powerpoker on/off [minbet N] [maxbet N]   Requires 3+ decks in the shoe",
+    "  star21 on/off [minbet N] [maxbet N]       Requires 2+ decks (2 decks uses its own paytable)",
+    "  buster on/off [minbet N] [maxbet N]       No deck restriction; single deck pays 500:1 on 8+ cards",
     "",
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
@@ -302,7 +304,14 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
 
     i = 0
     if i < len(rest) and rest[i] in ("on", "off"):
-        target.enabled = rest[i] == "on"
+        turning_on = rest[i] == "on"
+        if turning_on and not side_bet_allowed(key, session.shoe.num_decks):
+            req = "3+" if key == "power_poker" else "2+"
+            raise CommandError(
+                f"{label} requires {req} decks in the shoe (currently {session.shoe.num_decks}) "
+                f"-- 'decks N' + 'newshoe' first."
+            )
+        target.enabled = turning_on
         i += 1
     while i < len(rest):
         if rest[i] == "maxbet":

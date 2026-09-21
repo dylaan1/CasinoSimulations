@@ -19,6 +19,7 @@ from .engine import (
     try_start_round,
 )
 from .hand import Hand
+from .sidebets import side_bet_allowed
 
 # ---- Card art / hand-stacking geometry ----
 # Only one hand per spot is ever shown at full size (see the "active hand"
@@ -61,37 +62,78 @@ STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_ROWS)
 # shown inline in the stats bar (see PAYOUT_COL_W etc. below). Titled with
 # the compact (no-space) form of each bet's name -- these run narrower
 # than the wager-cell boxes, which use SIDEBET_LABELS below instead.
-PAYOUT_TABLES: List[Tuple[str, List[Tuple[str, str]]]] = [
-    ("PowerPoker", [
-        ("Royal Flush", "50:1"),
-        ("Straight Flush", "30:1"),
-        ("Flush", "15:1"),
-        ("Straight", "9:1"),
-        ("Trips", "3:1"),
-    ]),
-    ("Star21", [
-        ("Suited 7-7-7♦", "5000:1"),
-        ("Suited 7-7-7", "500:1"),
-        ("Suited 6-7-8", "100:1"),
-        ("Suited 21", "40:1"),
-        ("Unsuited 7-7-7", "20:1"),
-        ("Unsuited 6-7-8", "15:1"),
-        ("Unsuited 21", "5:1"),
-        ("Any 20", "3:1"),
-        ("Any 19", "2:1"),
-    ]),
-    ("Buster", [
-        ("8+ card bust", "250:1"),
-        ("7 card bust", "100:1"),
-        ("6 card bust", "50:1"),
-        ("5 card bust", "12:1"),
-        ("4 card bust", "3:1"),
-        ("3 card bust", "2:1"),
-    ]),
+#
+# Star21 and Buster each have a deck-count-dependent variant (see
+# payout_tables_for() below): Star21 swaps to its own double-deck-only
+# table at exactly 2 decks in the live shoe, and Buster's 8+ card row pays
+# 500:1 instead of 250:1 at exactly 1 deck.
+POWER_POKER_PAYOUTS: List[Tuple[str, str]] = [
+    ("Royal Flush", "50:1"),
+    ("Straight Flush", "40:1"),
+    ("Trips", "25:1"),
+    ("Straight", "10:1"),
+    ("Flush", "3:1"),
 ]
+STAR21_STANDARD_PAYOUTS: List[Tuple[str, str]] = [
+    ("Suited 7-7-7♦", "5000:1"),
+    ("Suited 7-7-7", "500:1"),
+    ("Suited 6-7-8", "100:1"),
+    ("Unsuited 7-7-7", "50:1"),
+    ("Suited 21", "30:1"),
+    ("Unsuited 6-7-8", "20:1"),
+    ("Unsuited 21", "8:1"),
+    ("Any 20", "4:1"),
+    ("Any 19", "3:1"),
+]
+STAR21_DOUBLE_DECK_PAYOUTS: List[Tuple[str, str]] = [
+    ("Suited 6-7-8", "500:1"),
+    ("Suited 21", "50:1"),
+    ("Unsuited 6-7-8", "40:1"),
+    ("Unsuited 21", "10:1"),
+    ("Any 20", "4:1"),
+    ("Any 19", "3:1"),
+]
+BUSTER_PAYOUTS: List[Tuple[str, str]] = [
+    ("8+ card bust", "250:1"),
+    ("7 card bust", "100:1"),
+    ("6 card bust", "50:1"),
+    ("5 card bust", "12:1"),
+    ("4 card bust", "3:1"),
+    ("3 card bust", "2:1"),
+]
+BUSTER_PAYOUTS_SINGLE_DECK: List[Tuple[str, str]] = [
+    ("8+ card bust", "500:1"),
+    ("7 card bust", "100:1"),
+    ("6 card bust", "50:1"),
+    ("5 card bust", "12:1"),
+    ("4 card bust", "3:1"),
+    ("3 card bust", "2:1"),
+]
+
+
+def payout_tables_for(num_decks: int) -> List[Tuple[str, List[Tuple[str, str]]]]:
+    star21_title = "Star21 (2-Deck)" if num_decks == 2 else "Star21"
+    star21_rows = STAR21_DOUBLE_DECK_PAYOUTS if num_decks == 2 else STAR21_STANDARD_PAYOUTS
+    buster_rows = BUSTER_PAYOUTS_SINGLE_DECK if num_decks == 1 else BUSTER_PAYOUTS
+    return [
+        ("PowerPoker", POWER_POKER_PAYOUTS),
+        (star21_title, star21_rows),
+        ("Buster", buster_rows),
+    ]
+
+
 PAYOUT_COL_W = 23  # label + right-aligned odds, per mini table
 PAYOUT_GAP = 2
-PAYOUT_MAX_ROWS = max(len(rows) for _, rows in PAYOUT_TABLES)  # 9 (Star21)
+# The worst case across every deck-count variant -- fixed at import time so
+# the layout's vertical budget (CONTENT_HEIGHT/MIN_LINES below) never shifts
+# at runtime just because the player changed the deck count.
+PAYOUT_MAX_ROWS = max(
+    len(POWER_POKER_PAYOUTS),
+    len(STAR21_STANDARD_PAYOUTS),
+    len(STAR21_DOUBLE_DECK_PAYOUTS),
+    len(BUSTER_PAYOUTS),
+    len(BUSTER_PAYOUTS_SINGLE_DECK),
+)
 STATS_BLOCK_ROWS = max(STATS_MAX_ROWS, PAYOUT_MAX_ROWS)  # shared row budget for the two side-by-side blocks
 
 # The payout tables + session/lifetime stats row needs its own width floor,
@@ -1138,7 +1180,7 @@ def render(
 
     payout_value_w = 7  # fits "5000:1", the widest odds figure, plus a pad column
     payout_label_w = PAYOUT_COL_W - payout_value_w
-    for slot, (title, rows) in enumerate(PAYOUT_TABLES):
+    for slot, (title, rows) in enumerate(payout_tables_for(session.shoe.num_decks)):
         tx = payout_x0 + slot * (PAYOUT_COL_W + PAYOUT_GAP)
         _safe_addstr(win, stats_y, tx, title, curses.A_BOLD | curses.A_UNDERLINE)
         for i, (label, odds) in enumerate(rows):
@@ -1233,10 +1275,24 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         "",
         "SIDE BETS",
     ]
-    for key, label in (("power_poker", "Power Poker"), ("star21", "Star 21"), ("dealer_buster", "Dealer Buster")):
+    num_decks = session.shoe.num_decks
+    for key, label, req in (
+        ("power_poker", "Power Poker", "3+"),
+        ("star21", "Star 21", "2+"),
+        ("dealer_buster", "Dealer Buster", None),
+    ):
         rule = getattr(r, key)
-        state = f"ON  (min ${rule.min_bet:,.0f}, max ${rule.max_bet:,.0f})" if rule.enabled else "off"
+        if rule.enabled:
+            state = f"ON  (min ${rule.min_bet:,.0f}, max ${rule.max_bet:,.0f})"
+            if key == "star21" and num_decks == 2:
+                state += "  [2-Deck paytable]"
+        elif req is not None and not side_bet_allowed(key, num_decks):
+            state = f"off (locked -- requires {req} decks, shoe has {num_decks})"
+        else:
+            state = "off"
         lines.append(f"  {label:<16} {state}")
+    if num_decks == 1:
+        lines.append("  (single-deck Buster: 8+ card bust pays 500:1)")
     _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
 
 
@@ -1682,6 +1738,13 @@ def _main(stdscr) -> None:
                 continue
 
             elif round_ is None:
+                if ch == ord("/") and input_focus != "cli":
+                    # Same effect as clicking the CLI line: commit whatever
+                    # wager edit was in progress, then hand focus to the
+                    # command input -- a keyboard-only equivalent of the click.
+                    commit_bet_cell()
+                    input_focus = "cli"
+                    continue
                 if ch == curses.KEY_LEFT:
                     commit_bet_cell()
                     # Step by actual screen position, not raw spot index --
