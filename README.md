@@ -29,6 +29,22 @@ realistic table.
   card's back peeking out just below and to the right of it — instead of
   sitting side by side. Once revealed (or during the dealer's own turn), it
   switches to the same fanned row every other hand uses.
+- **Dealer's box**: a `♦`-bordered rectangle frames the dealer's hand —
+  top border is the dashed line under the red status bar, sides run down
+  the same dividers that separate the three spot columns, bottom border is
+  its own `♦` row sitting just past the dealer's card stack. On the rare
+  hand big enough to spill past it, the cards simply draw over the border
+  glyphs rather than getting clipped or hidden. Each player column's own
+  `♦` divider, by contrast, only starts at the settlement-banner row right
+  above the wager box — it no longer runs up alongside the cards, so it
+  reads as bordering just the wager area, not the whole spot.
+- **Player column order, top to bottom**: any already-completed split
+  hands' collapsed values, directly above the cards (no gap) — cards —
+  the current hand's value (doubling as the Early Surrender?/Insurance?/
+  Even Money?/Double? prompt when one applies) directly below the cards,
+  no gap — the main settlement banner — the wager box — the side-bet
+  boxes — the side-bet banner. The rare 13+-card overflow ticker moved
+  down below the side-bet banner, out of the way of the main flow.
 
 **Configurable table rules** (all changeable live via commands, no restart
 required)
@@ -66,18 +82,26 @@ double options, side bets) applies immediately.
 - Splits (up to the configured max, including resplit aces) are tracked
   independently per hand, each playing out in turn in table order.
 - A split spot's settlement banner tallies its hands in words — e.g.
-  "2 Wins/1 Loss" — and a hand that was both split *and* doubled down counts
-  double in that tally, since twice the money was riding on it (splitting a
-  pair, doubling one hand to a win while the other also wins, reads
-  "3 Wins", not "2 Wins").
+  "2 Wins/1 Loss". A hand that was both split *and* doubled down is its own
+  DDWin/DDLoss category rather than folded into the plain Win/Loss counts —
+  e.g. splitting a pair, doubling one hand to a win while the other also
+  wins, reads "1 DDWin/1 Win", not "2 Wins", since only one of those two
+  hands actually had twice the money riding on it.
+- **Split aces** always stand on the single hard total they're actually
+  standing on once resolved — a hand that drew a ten-value card after
+  splitting aces shows "\*21\*", never a lingering soft "\*11/21\*".
 
 **Player actions**
 
 - `Hit`, `Stand`, `Double`, `Split`, `Surrender` (late surrender only, when
   enabled), each hinted on screen for whatever's legal on the current hand.
 - **Double down**: doubles the wager, draws exactly one card. With "double
-  facedown" on, that card is dealt face down and only flips up at the
-  dealer's reveal step. A double that busts settles immediately.
+  facedown" on, that card is dealt face down *only* on a hand with little
+  or no bust risk — a soft total, or a hard total of 11 or fewer — computed
+  from the hand's original two cards before the double card is drawn; a
+  hard 12+ always deals its double card face up, so an immediate bust stays
+  visible. It only flips up at the dealer's reveal step when it was dealt
+  face down at all. A double that busts settles immediately either way.
 - **Double on a natural blackjack** (`double blackjack on`): instead of an
   automatic 3:2 payout, a dealt blackjack prompts `Double?` (`D` accepts,
   `RETURN` declines) — a natural can never bust when doubled (Ace forced to
@@ -99,7 +123,7 @@ double options, side bets) applies immediately.
   instead of insurance; every other hand is offered **insurance**, sized to
   exactly half its main wager. Insurance pays 2:1 (a 3x return) if the
   dealer has blackjack, and settles into the *same* side-bet banner as
-  Power Poker/Star21/Buster ("Side Bets Total"), not a banner of its own.
+  Power Poker/Star 21/Buster ("Side Bets Total"), not a banner of its own.
 - **Early surrender** (when enabled) is offered before the peek, Ace
   up-cards only, and is never offered on a player blackjack.
 
@@ -110,7 +134,7 @@ all at once at the end of the round:
 
 | Event | When it settles | Banner text | Color |
 |---|---|---|---|
-| Power Poker / Star21 | Immediately after the deal (both only need the first 2 cards + dealer up-card) | side-bet label, e.g. "STRAIGHT FLUSH" | bet-specific accent |
+| Power Poker / Star 21 | Immediately after the deal (both only need the first 2 cards + dealer up-card) | side-bet label, e.g. "STRAIGHT FLUSH" | bet-specific accent |
 | Insurance | The instant the dealer's hole card is peeked | "INSURANCE" (row 1), folded into "Side Bets Total" (row 2) | beige / black |
 | Player blackjack (unbeaten) | Immediately, once the dealer is confirmed clean | "BLACKJACK" | yellow on dark purple |
 | Dealer blackjack | Immediately, at the peek | "DEALER BLACKJACK" | white on maroon |
@@ -140,7 +164,7 @@ stats bar, its own themed wager cell, and its own min/max bet:
   Requires **3+ decks** in the live shoe — firmly disabled below that (the
   odds swing too far in the player's favor with fewer decks in play).
 
-- **Star21** — the same three cards summed like a 21 total. Requires **2+
+- **Star 21** — the same three cards summed like a 21 total. Requires **2+
   decks**; the paytable itself depends on exactly how many:
 
   *Standard table (3+ decks):*
@@ -184,7 +208,7 @@ stats bar, its own themed wager cell, and its own min/max bet:
 
   Whenever a shoe is cut (session start, `newshoe`, or the automatic
   post-round reshuffle) that no longer supports an enabled Power Poker or
-  Star21 bet, it's force-disabled automatically — the `gamerules` screen
+  Star 21 bet, it's force-disabled automatically — the `gamerules` screen
   and the wager grid both reflect a locked bet as "off".
 
 **Card counting**
@@ -211,11 +235,26 @@ A full-screen `betspread` table with $10/$25/$100 minimum-table variants,
 each showing 1:10, 1:12, and 1:15 spreads by true count, as a quick
 reference while you play.
 
+**Sound effects**
+
+Optional audio cues, played through whichever of `afplay`/`paplay`/
+`aplay`/`ffplay`/`mpg123` is on your system `PATH` — the game runs
+completely fine with no sound at all if none of those are found. Drop the
+matching file into `cs-blackjack/sounds/` (see that folder's own
+`README.md`) and it plays automatically, no restart or config needed:
+
+| File | Plays when |
+|---|---|
+| `card-deal.mp3` | Each card the dealer deals, and each face-down card (the dealer's hole card, a face-down double/RSA card) turning face up. |
+| `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
+| `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
+| `wager-win.wav` | A round that settles with a positive net return overall. |
+
 **Bankroll and statistics**
 
 - A **lifetime** panel (main-bet P/L $, side-bet P/L $, EV % on main
   wagers, hands played, wins/losses/pushes/surrenders, 8+ card dealer
-  busts, and Star21 7-7-7♦ hits) and a **session** panel (bankroll,
+  busts, and Star 21 7-7-7♦ hits) and a **session** panel (bankroll,
   main/side-bet P/L $, hands played, wins/losses/pushes, surrenders,
   doubles, splits, and blackjacks dealt this session). Both are saved to
   disk automatically.
@@ -228,6 +267,15 @@ reference while you play.
 - `hardreset` (type `confirm`) wipes the lifetime panel back to zero *and*
   resets the bankroll to its default, alongside the usual shoe/session
   reset.
+- **Net Return**: a running "Net Return: $X.XX" figure on the red status
+  bar, directly below Bankroll, tracking this round's cumulative result
+  across all three spots' main wagers, side bets, and insurance combined.
+  It starts as the negative of everything wagered (a debit) the instant
+  your wagers are dealt, and climbs back toward — and past — zero as
+  results settle in, same as the stats panel: nothing updates ahead of an
+  animation or a settlement banner actually showing it to you. It
+  disappears once you press RETURN to move past a settled round, and
+  reappears the moment your next round's wagers are dealt.
 
 **Shoe/session management**
 
@@ -241,6 +289,17 @@ reference while you play.
 
 - The betting grid's wager and side-bet cells can be clicked directly, in
   addition to arrow-key navigation.
+- **Arrow-key navigation is direction-relative**, matching the cells'
+  actual on-screen layout instead of a fixed left/right-for-spots,
+  up/down-for-bet-type scheme: `LEFT`/`RIGHT` on a main wager cell moves
+  between spots as before; `DOWN` from a main wager cell drops onto that
+  spot's side-bet row, landing on Star 21 (the enabled bet closest to
+  center) or whichever enabled side bet is closest to it; `LEFT`/`RIGHT`
+  on a side-bet cell moves across the whole side-bet row as one continuous
+  strip, crossing straight from one spot's Buster cell into the next
+  spot's Power Poker cell at the boundary; `UP` from any side-bet cell
+  returns to that same spot's own main wager cell. A disabled side bet is
+  skipped entirely, same as before.
 - The command line can be focused either by clicking it or by pressing `/`
   — typing never lands in the command line any other way, so a stray
   keystroke mid-round can't silently start building a command behind your
@@ -297,7 +356,9 @@ and reloaded automatically the next time you launch.
 - **Betting grid**: arrow keys (or a mouse click) move between the wager
   cells for each spot (main wager plus the three side bets); type digits to
   set an amount for the highlighted cell, then RETURN to confirm it (or to
-  deal, once your wagers are set).
+  deal, once your wagers are set). The command line reads "`[RETURN] to
+  Deal`" by default; after a new shoe/session message shows there instead,
+  it reverts back to that default 2 seconds later.
 - **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
   Surrender.
 - **Prelim prompts** (shown with their own key hints on screen): early
@@ -379,7 +440,7 @@ table, so there's no separate command to look them up.
    deal.
 2. **Deal** — each active spot gets two cards, then the dealer, twice —
    rightmost spot first, animated one card at a time.
-3. **Side bet settlement** — Power Poker and Star21 settle and pay out
+3. **Side bet settlement** — Power Poker and Star 21 settle and pay out
    immediately; nothing about them waits on the peek or your play.
 4. **Peek / insurance / even money / early surrender** — only on an Ace or
    ten-value dealer up-card. Insurance settles the instant the peek
@@ -402,13 +463,14 @@ table, so there's no separate command to look them up.
 | `cards.py` | `Card`, `Shoe` (shuffling, drawing, Hi-Lo running/true count) |
 | `hand.py` | `Hand` — cards, totals (soft/hard), blackjack/bust/split/double state |
 | `dealer.py` | Dealer drawing logic (S17/H17) |
-| `sidebets.py` | Power Poker / Star21 (standard + double-deck) / Dealer Buster evaluators and their deck-count gating |
+| `sidebets.py` | Power Poker / Star 21 (standard + double-deck) / Dealer Buster evaluators and their deck-count gating |
 | `rules.py` | `Rules`/`SideBetRules` — every configurable table rule, with JSON (de)serialization |
 | `stats.py` | Lifetime and session statistics tracking |
 | `persist.py` | Load/save all state to `~/.cs-blackjack_state.json` |
 | `commands.py` | Parses and applies every CLI command |
 | `engine.py` | `GameSession`/`Round` — the full round state machine: dealing order, prelim prompts, player actions, settlement timing |
 | `ui.py` | The `curses` TUI: layout, rendering, animation, input handling |
+| `sound.py` | Fire-and-forget sound-effect playback (see `sounds/README.md`) |
 | `__main__.py` | `python3 -m cs-blackjack` entry point |
 
 ### Data storage

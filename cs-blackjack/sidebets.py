@@ -45,7 +45,7 @@ def evaluate_power_poker(player_cards: List[Card], dealer_up: Card) -> Result:
 
 
 def evaluate_star21(player_cards: List[Card], dealer_up: Card) -> Result:
-    """Standard (3+ deck) Star21 table: player's first two cards + dealer's
+    """Standard (3+ deck) Star 21 table: player's first two cards + dealer's
     up card, summed like a 21 total (Ace=11)."""
     cards = list(player_cards[:2]) + [dealer_up]
     ranks = [c.rank for c in cards]
@@ -77,7 +77,7 @@ def evaluate_star21(player_cards: List[Card], dealer_up: Card) -> Result:
 
 
 def evaluate_star21_double_deck(player_cards: List[Card], dealer_up: Card) -> Result:
-    """Double-deck (exactly 2 decks) Star21 table -- no 7-7-7 categories at
+    """Double-deck (exactly 2 decks) Star 21 table -- no 7-7-7 categories at
     all; a 7-7-7 hand (which also totals 21) just pays as a plain 21."""
     cards = list(player_cards[:2]) + [dealer_up]
     ranks = [c.rank for c in cards]
@@ -122,7 +122,7 @@ def power_poker_allowed(num_decks: int) -> bool:
 
 
 def star21_allowed(num_decks: int) -> bool:
-    """Star21 needs 2+ decks; exactly 2 uses the double-deck paytable
+    """Star 21 needs 2+ decks; exactly 2 uses the double-deck paytable
     (evaluate_star21_double_deck), 3+ uses the standard one."""
     return num_decks >= 2
 
