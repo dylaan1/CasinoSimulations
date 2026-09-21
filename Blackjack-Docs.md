@@ -167,17 +167,17 @@ stats bar, its own themed wager cell, and its own min/max bet:
 
   *Standard table (3+ decks):*
 
-  | Hand | Pays |
-  |---|---|
-  | Suited 7-7-7♦ | 5000:1 |
-  | Suited 7-7-7 | 500:1 |
-  | Suited 6-7-8 | 100:1 |
-  | Unsuited 7-7-7 | 50:1 |
-  | Suited 21 | 30:1 |
-  | Unsuited 6-7-8 | 20:1 |
-  | Unsuited 21 | 8:1 |
-  | Any 20 | 4:1 |
-  | Any 19 | 3:1 |
+  | Hand | Payout (Standard) | Payout (Double Deck) |
+  |---|---|---|
+  | Suited 7-7-7♦ | 5000:1 | –– |
+  | Suited 7-7-7 | 500:1 | –– |
+  | Suited 6-7-8 | 100:1 | 500:1 |
+  | Unsuited 7-7-7 | 50:1 | –– |
+  | Suited 21 | 30:1 | 50:1 |
+  | Unsuited 6-7-8 | 20:1 | 40:1 |
+  | Unsuited 21 | 8:1 | 10:1 |
+  | Any 20 | 4:1 | 4:1 |
+  | Any 19 | 3:1 | 3:1 |
 
   *Double-deck table (exactly 2 decks — no 7-7-7 categories; a 7-7-7 hand
   just pays as a plain 21):*
