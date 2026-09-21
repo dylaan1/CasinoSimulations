@@ -18,19 +18,21 @@ HELP_LINES = [
     "  das on/off                    Double after split",
     "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands, up to 4)",
     "  rsa facedown on/off            Deal split-ace cards face down (RSA off only)",
-    "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5",
+    "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5 (next shuffle)",
     "  surr late/early/off            Surrender mode",
-    "  h17  /  s17                    Dealer hits / stands on soft 17",
-    "  decks N                        Number of decks (1-12)",
-    "  deckpen 0.NN                   Deck penetration before reshuffle",
+    "  h17  /  s17                    Dealer hits / stands on soft 17 (next shuffle)",
+    "  decks N                        Number of decks, 1-12 (next shuffle)",
+    "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
     "  splitmax N                     Max hands from splitting non-ace pairs",
     "  tablemin N  /  tablemax N      Table wager limits",
     "  double facedown on/off         Deal the double-down card face down",
     "  double blackjack on/off        Offer a double instead of an automatic 3:2 payout on a natural",
+    "  hilo on/off                    Show/hide the running and true count (still counted either way)",
     "",
     "BANKROLL",
     "  bank N                         Set bankroll to N",
     "  bank add N                     Add N to bankroll",
+    "  bank reset                     Reset bankroll to its default (RETURN confirms)",
     "  bank default N                 Set the bankroll 'newsession'/hardreset reset to",
     "",
     "TABLE SETUP",
@@ -140,11 +142,11 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
 
     if head == "bj" and rest and rest[0] in ("32", "65"):
         rules.blackjack_payout = 1.5 if rest[0] == "32" else 1.2
-        return f"Blackjack pays {rules.blackjack_payout_label()}"
+        return f"Blackjack will pay {rules.blackjack_payout_label()} starting next shuffle"
 
     if head in ("bj32", "bj65"):
         rules.blackjack_payout = 1.5 if head == "bj32" else 1.2
-        return f"Blackjack pays {rules.blackjack_payout_label()}"
+        return f"Blackjack will pay {rules.blackjack_payout_label()} starting next shuffle"
 
     if head == "surr":
         mode = _require(rest, 0, "surr late/early/off")
@@ -161,13 +163,17 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         rules.double_blackjack = _parse_bool_on_off(_require(rest, 1, "double blackjack on/off"))
         return f"Double down on a natural blackjack: {'ON' if rules.double_blackjack else 'OFF'}"
 
+    if head == "hilo":
+        rules.show_hilo = _parse_bool_on_off(_require(rest, 0, "hilo on/off"))
+        return f"Running/true count display: {'ON' if rules.show_hilo else 'OFF'} (still counted either way)"
+
     if head == "h17":
         rules.hit_soft_17 = True
-        return "Dealer hits soft 17 (H17)"
+        return "Dealer will hit soft 17 (H17) starting next shuffle"
 
     if head == "s17":
         rules.hit_soft_17 = False
-        return "Dealer stands on soft 17 (S17)"
+        return "Dealer will stand on soft 17 (S17) starting next shuffle"
 
     if head == "decks":
         n = _parse_int(_require(rest, 0, "decks N"), "decks")
@@ -219,6 +225,9 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
                 raise CommandError("default bankroll cannot be negative")
             rules.default_bankroll = amt
             return f"Default starting bankroll set to ${amt:,.2f} (applies on 'newsession' or 'hardreset')"
+        if rest and rest[0] == "reset":
+            session.pending_confirmation = "bank_reset"
+            return "Press RETURN to reset your bankroll to its default (any other key cancels)."
         amt = _parse_float(_require(rest, 0, "bank N"), "bank")
         if amt < 0:
             raise CommandError("bankroll cannot be negative")

@@ -41,7 +41,11 @@ class Card:
         return f"{self.short_rank}{self.glyph}"
 
 
-def _hilo_count(card: Card) -> int:
+def hilo_value(card: Card) -> int:
+    """Hi-Lo running-count value of a single card. Public (not just used
+    internally by Shoe.draw()) so the UI can recompute a *partial* running
+    count over just the cards currently visible to the player, separate
+    from the shoe's own fully-advanced internal count."""
     if card.rank in {"2", "3", "4", "5", "6"}:
         return 1
     if card.rank in {"7", "8", "9"}:
@@ -88,7 +92,7 @@ class Shoe:
         card = self._cards.pop()
         self.drawn_counts[card.rank] += 1
         self.cards_dealt += 1
-        self.running_count += _hilo_count(card)
+        self.running_count += hilo_value(card)
         return card
 
     @property

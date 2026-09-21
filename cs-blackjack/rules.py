@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 
 
+def format_blackjack_payout(payout: float) -> str:
+    return "3:2" if abs(payout - 1.5) < 1e-9 else "6:5"
+
+
 @dataclass
 class SideBetRules:
     enabled: bool = False
@@ -24,6 +28,7 @@ class Rules:
     double_facedown: bool = False  # if True, a double-down card is dealt face down until dealer/settlement reveal
     rsa_facedown: bool = False  # if True (only settable while rsa is off), split-ace cards are dealt face down
     double_blackjack: bool = False  # if True, a player dealt a natural blackjack is offered a double instead of an automatic 3:2 payout
+    show_hilo: bool = True  # if False, the running/true count (and their labels) are hidden from the red bar -- counting still happens internally
 
     table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
     table_max: float = 5000.0  # max main wager on a single hand
@@ -63,4 +68,4 @@ class Rules:
         return rules
 
     def blackjack_payout_label(self) -> str:
-        return "3:2" if abs(self.blackjack_payout - 1.5) < 1e-9 else "6:5"
+        return format_blackjack_payout(self.blackjack_payout)

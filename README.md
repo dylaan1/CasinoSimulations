@@ -24,6 +24,11 @@ realistic table.
   taken, rightmost active spot first working left (mirroring how a live
   dealer works around a table), not left-to-right. The initial deal animates
   one card at a time (250ms/card) in that same order.
+- **Dealer card stack**: before the hole card is revealed, the dealer's two
+  cards render as a real stack — the up-card fully visible on top, the hole
+  card's back peeking out just below and to the right of it — instead of
+  sitting side by side. Once revealed (or during the dealer's own turn), it
+  switches to the same fanned row every other hand uses.
 
 **Configurable table rules** (all changeable live via commands, no restart
 required)
@@ -37,6 +42,18 @@ required)
 - Surrender mode: late, early (Ace up-card only, and never offered on a
   player blackjack — that's an even-money decision instead), or off
 - Dealer hits or stands on soft 17 (H17/S17)
+- Whether the running/true count displays at all (`hilo on/off` — it's
+  still tracked internally either way, just visible or not)
+
+Deck count, penetration, blackjack payout, and dealer soft-17 behavior —
+the four settings on the blue rules-summary line — only ever take effect
+at the *next* shuffle, so you never play through one shoe under two
+different rulesets. Change one mid-shoe and a "\* Rule Changes Pending \*"
+flag lights up next to the card count until the next reshuffle (`newshoe`,
+or the automatic one when the shoe runs low) actually applies it; until
+then, the blue and red summary lines keep showing what's really in effect,
+not what's queued up. Every other rule (DAS, RSA, surrender, table limits,
+double options, side bets) applies immediately.
 - Max hands from splitting non-ace pairs (1–8)
 - Table min/max wagers
 - Optional face-down double-down card (revealed only at the dealer's
@@ -172,7 +189,16 @@ stats bar, its own themed wager cell, and its own min/max bet:
 
 **Card counting**
 
-- Running count and true count (Hi-Lo) are always visible in the header.
+- Running count and true count (Hi-Lo) are visible in the header by
+  default — toggle them off with `hilo off` to practice counting blind
+  (the count is still tracked internally either way, just not displayed)
+  and `hilo on` to bring them back.
+- The displayed count only ever reflects cards you've actually seen: it
+  climbs one card at a time as the deal animates, never jumps ahead to the
+  round's final value early, and excludes the dealer's hole card (and any
+  face-down double-down/resplit-aces card) until it's actually revealed —
+  so nothing about the count can tip you off to an outcome before the
+  table shows it to you.
 - The shoe reshuffle is deliberately deferred until you're back at the
   betting screen between rounds (never mid-round), so a count you bet off
   of is never invalidated partway through a hand.
@@ -193,19 +219,35 @@ reference while you play.
   main/side-bet P/L $, hands played, wins/losses/pushes, surrenders,
   doubles, splits, and blackjacks dealt this session). Both are saved to
   disk automatically.
-- `hardreset` (with a typed `confirm`) wipes the lifetime panel back to
-  zero without touching your bankroll or session stats.
+- Both panels hold their pre-round numbers for the whole round and only
+  catch up to the real values once it's fully settled — even though some
+  outcomes (an immediate blackjack, a side bet win) are internally decided
+  well before that. Without this, those numbers ticking up early would be
+  its own tell, well before the deal animation or a settlement banner
+  actually shows you the result.
+- `hardreset` (type `confirm`) wipes the lifetime panel back to zero *and*
+  resets the bankroll to its default, alongside the usual shoe/session
+  reset.
 
 **Shoe/session management**
 
-`newshoe` and `newsession` commands (with a confirmation step) to reshuffle
-or fully reset stats on demand.
+- `newshoe` and `newsession` (each with a RETURN confirmation) reshuffle
+  the shoe, or reshuffle plus reset session stats. Neither one touches
+  your bankroll.
+- `bank reset` (RETURN confirms) resets just the bankroll to its default,
+  independent of the shoe or any stats.
 
 **Mouse or keyboard**
 
 - The betting grid's wager and side-bet cells can be clicked directly, in
   addition to arrow-key navigation.
-- The command line can be focused either by clicking it or by pressing `/`.
+- The command line can be focused either by clicking it or by pressing `/`
+  — typing never lands in the command line any other way, so a stray
+  keystroke mid-round can't silently start building a command behind your
+  back.
+- Clicking anywhere that isn't a wager cell, a side-bet cell, or the
+  command line clears whatever's currently highlighted; clicking a real
+  cell (or using the arrow keys, or `/`) highlights it again as normal.
 - Keyboard input queued up while a settlement banner is still cycling is
   discarded before the next hand starts, so a stray extra RETURN press
   can't accidentally fire an action on the next deal.
@@ -223,7 +265,7 @@ tables — all one keypress away, no need to memorize anything up front.
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **198x47** — it will refuse to
+  escape sequence on launch) and is at least **198x48** — it will refuse to
   draw the table and show a "too small" message below that size
 
 No third-party packages are required to run the game itself.
@@ -276,15 +318,16 @@ and reloaded automatically the next time you launch.
 | `das on/off` | Double after split |
 | `rsa on/off [maxsplit N]` | Resplit aces (max resulting hands, up to 4) |
 | `rsa facedown on/off` | Deal split-ace cards face down (RSA off only) |
-| `bj32` / `bj65` | Blackjack pays 3:2 or 6:5 |
+| `bj32` / `bj65` | Blackjack pays 3:2 or 6:5 (next shuffle) |
 | `surr late/early/off` | Surrender mode |
-| `h17` / `s17` | Dealer hits / stands on soft 17 |
-| `decks N` | Number of decks, 1–12 (takes effect next shuffle) |
-| `deckpen 0.NN` | Deck penetration before reshuffle |
+| `h17` / `s17` | Dealer hits / stands on soft 17 (next shuffle) |
+| `decks N` | Number of decks, 1–12 (next shuffle) |
+| `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle) |
 | `splitmax N` | Max hands from splitting non-ace pairs |
 | `tablemin N` / `tablemax N` | Table wager limits |
 | `double facedown on/off` | Deal the double-down card face down |
 | `double blackjack on/off` | Offer a double instead of an automatic 3:2 payout on a natural |
+| `hilo on/off` | Show/hide the running and true count (still tracked either way) |
 
 **Bankroll**
 
@@ -292,7 +335,8 @@ and reloaded automatically the next time you launch.
 |---|---|
 | `bank N` | Set bankroll to N |
 | `bank add N` | Add N to bankroll |
-| `bank default N` | Set the bankroll `newsession`/`hardreset` resets to |
+| `bank reset` | Reset bankroll to its default (RETURN confirms) |
+| `bank default N` | Set the bankroll `bank reset`/`hardreset` resets to |
 
 **Table setup**
 
@@ -313,8 +357,8 @@ and reloaded automatically the next time you launch.
 | Command | Effect |
 |---|---|
 | `newshoe` | Reshuffle a fresh shoe (RETURN confirms) |
-| `newsession` | Reset shoe + session stats + bankroll (RETURN confirms) |
-| `hardreset` | Reset lifetime stats + newsession (type `confirm`) |
+| `newsession` | Reset shoe + session stats, bankroll untouched (RETURN confirms) |
+| `hardreset` | Reset lifetime stats + session stats + shoe + bankroll (type `confirm`) |
 
 **Reference**
 
