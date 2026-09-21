@@ -26,7 +26,7 @@ OUTCOME_LABELS = {
 }
 
 SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
-SIDE_BET_LABELS = {"power_poker": "PowerPoker", "star21": "Star21", "dealer_buster": "Dealer Buster"}
+SIDE_BET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
 
 # Spot index -> its on-screen column slot (0=left, 1=middle, 2=right). Spot 0
 # ("Hand #1") sits front-and-center under the dealer since it's the one spot
@@ -171,7 +171,7 @@ class GameSession:
         self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
 
     def _enforce_sidebet_deck_gate(self) -> None:
-        """Power Poker (3+ decks) and Star21 (2+ decks) are firmly disabled
+        """Power Poker (3+ decks) and Star 21 (2+ decks) are firmly disabled
         below their deck-count floor -- called right after (re)cutting the
         shoe so a rule flag left ON from a higher deck count (or loaded from
         a stale persisted session) can't silently stay enabled against a
@@ -388,7 +388,7 @@ class Round:
         self._prelim_index = 0
         self._dealer_draw_iter: Optional[Iterator[Hand]] = None
 
-        # Power Poker and Star21 only key off each spot's first two cards
+        # Power Poker and Star 21 only key off each spot's first two cards
         # plus the dealer's up card -- already fully known -- so they
         # settle immediately here, before any early-surrender/insurance
         # decision or player action. Dealer Buster can't resolve until the
@@ -654,12 +654,20 @@ class Round:
         resulting bust settles immediately, unless the card is dealt face
         down (double_facedown), in which case it -- and any bust -- stays
         hidden until the REVEAL phase. Shared by an ordinary in-turn
-        double and an accepted double on a natural blackjack."""
+        double and an accepted double on a natural blackjack.
+
+        Facedown doubles are only offered on hands with little/no bust
+        risk -- soft totals, or a hard total of 11 or fewer -- computed
+        from the hand's original two cards before the double card is
+        drawn. A hard 12+ always deals its double card face up instead,
+        so a bust is immediately visible and settles right away, same as
+        any other bust."""
         self.session.adjust_bankroll(-hand.bet)
         hand.bet *= 2
         hand.doubled = True
+        facedown_eligible = hand.is_soft or hand.best_value <= 11
         hand.add_card(self.session.shoe.draw())
-        if self.rules.double_facedown:
+        if self.rules.double_facedown and facedown_eligible:
             hand.double_hidden = True
         elif hand.is_bust:
             payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
@@ -695,6 +703,15 @@ class Round:
                 hand = spot.hands[self._current_hand_index]
                 if self._hand_needs_play(spot, hand):
                     return
+                if hand.is_split_aces and not hand.is_resolved:
+                    # A split-ace hand that was never offered a resplit
+                    # decision (RSA off, no Ace drawn, or already at the
+                    # resplit cap) never goes through perform_action("stand")
+                    # -- mark it stood here so is_resolved/hand_value_label
+                    # treat it as done and collapse its display to the
+                    # single hard total it's actually standing on, instead
+                    # of showing a soft "x/y" split forever.
+                    hand.stood = True
                 self._current_hand_index += 1
             self._play_cursor += 1
             self._current_hand_index = 0
@@ -851,7 +868,7 @@ class Round:
         self._advance_double_blackjack_cursor()
 
     def _settle_pp_s21(self) -> None:
-        """Power Poker and Star21 settle immediately after the deal -- both
+        """Power Poker and Star 21 settle immediately after the deal -- both
         only key off the spot's first two cards and the dealer's up card,
         already fully known the moment dealing finishes, well before any
         early-surrender/insurance decision or player action."""
@@ -864,7 +881,7 @@ class Round:
             player_cards = spot.side_bet_snapshot
             for key, (name, fn) in evaluators.items():
                 # Evaluated regardless of whether it was actually wagered --
-                # some outcomes (like the Star21 7-7-7 diamonds hit) are
+                # some outcomes (like the Star 21 7-7-7 diamonds hit) are
                 # tracked in lifetime stats purely as an event, independent
                 # of the side bet's own win/loss bookkeeping below.
                 outcome = fn(player_cards, self.dealer_up)
@@ -900,7 +917,7 @@ class Round:
 
     def _settle_buster(self) -> None:
         """Dealer Buster can't resolve until the dealer's hand is fully
-        played out, so -- unlike Power Poker and Star21 -- it settles
+        played out, so -- unlike Power Poker and Star 21 -- it settles
         alongside the final main-wager settlement, not right after the deal."""
         for spot in self.spots:
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
