@@ -245,11 +245,15 @@ matching file into `cs-blackjack/sounds/` (see that folder's own
 
 | File | Plays when |
 |---|---|
-| `card-deal.mp3` | Each card the dealer deals, and each face-down card (the dealer's hole card, a face-down double/RSA card) turning face up. |
+| `card-deal.mp3` | Each card dealt to any hand — the initial deal, a player hit/double/split, or a dealer hit — and each face-down card (the dealer's hole card, a face-down double/RSA card) turning face up. The dealer's own busting card plays this same file, just ~10% louder, instead of `bust-sound.wav`. |
 | `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
 | `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
 | `wager-win.wav` | A round that settles with a positive net return overall. |
-| `bust-sound.wav` | A player hand busting (a hit, or a face-up double-down), or the dealer's hand busting. |
+| `bust-sound.wav` | A player hand busting (a hit, or a face-up double-down), a doubled hand that loses without busting, or a confirmed dealer blackjack (once per round, regardless of push/loss/even-money on any one spot) — not the dealer's own bust. |
+
+A plain main-wager loss, push, or surrender (no double, no bust) stays
+silent; only a win, a bust, a losing double, or a dealer blackjack adds a
+sound beyond the ordinary card-deal ones.
 
 **Bankroll and statistics**
 
