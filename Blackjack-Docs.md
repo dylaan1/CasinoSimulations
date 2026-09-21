@@ -1,4 +1,4 @@
-## Blackjack
+## CasinoSimulations™️ Blackjack
 
 A full-screen, terminal-based blackjack game built for practicing real-money
 play, card counting, and casino-accurate table procedure. It runs in a
