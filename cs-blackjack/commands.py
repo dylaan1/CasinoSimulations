@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING, List
 
+from .rules import RANDOM_PENETRATION_RANGE
 from .sidebets import side_bet_allowed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -23,6 +24,7 @@ HELP_LINES = [
     "  h17  /  s17                    Dealer hits / stands on soft 17 (next shuffle)",
     "  decks N                        Number of decks, 1-12 (next shuffle)",
     "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
+    "  deckpen rand                   Random penetration (0.65-0.80) re-rolled on every new shoe",
     "  splitmax N                     Max hands from splitting non-ace pairs",
     "  tablemin N  /  tablemax N      Table wager limits",
     "  double facedown on/off         Deal the double-down card face down",
@@ -42,6 +44,9 @@ HELP_LINES = [
     "  powerpoker on/off [minbet N] [maxbet N]   Requires 3+ decks in the shoe",
     "  star21 on/off [minbet N] [maxbet N]       Requires 2+ decks (2 decks uses its own paytable)",
     "  buster on/off [minbet N] [maxbet N]       No deck restriction; single deck pays 500:1 on 8+ cards",
+    "  powerpoker <category> <payout>            Adjust a payout, e.g. 'powerpoker royalflush 60'",
+    "  star21 <category> <payout>                e.g. 'star21 suited777d 3000' or 'star21 unsuited21 9'",
+    "  buster <category> <payout>                e.g. 'buster 8+ 300' or 'buster 7 50'",
     "",
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
@@ -183,9 +188,15 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         return f"Shoe will use {n} deck(s) starting next shuffle"
 
     if head == "deckpen":
-        p = _parse_float(_require(rest, 0, "deckpen 0.NN"), "deckpen")
+        arg = _require(rest, 0, "deckpen 0.NN or deckpen rand")
+        if arg == "rand":
+            rules.random_penetration = True
+            lo, hi = RANDOM_PENETRATION_RANGE
+            return f"Deck penetration randomized {lo:.2f}-{hi:.2f}, re-rolled on every new shoe (takes effect next shuffle)"
+        p = _parse_float(arg, "deckpen")
         if not (0.1 <= p <= 1.0):
             raise CommandError("deckpen must be between 0.1 and 1.0")
+        rules.random_penetration = False
         rules.penetration = p
         return f"Deck penetration set to {p:.2f} (takes effect next shuffle)"
 
@@ -242,6 +253,8 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         return f"Playing {n} hand(s) per round"
 
     if head in ("powerpoker", "star21", "buster"):
+        if rest and rest[0] not in ("on", "off"):
+            return _sidebet_payout_command(head, rest, session)
         return _sidebet_toggle(head, rest, session)
 
     if head == "newshoe":
@@ -345,3 +358,36 @@ def _sidebet_toggle(head: str, rest: List[str], session: "GameSession") -> str:
         f"{label}: {'ON' if target.enabled else 'OFF'} "
         f"(min ${target.min_bet:,.2f}, max ${target.max_bet:,.2f})"
     )
+
+
+def _sidebet_payout_command(head: str, rest: List[str], session: "GameSession") -> str:
+    """'<sidebet> <category> <payout>' -- adjusts a specific payout
+    category's odds live, e.g. 'star21 suited777d 3000' (7-7-7 diamonds
+    now pays 3000:1) or 'buster 8+ 300'. Applies to every table variant
+    for that side bet which actually has the category (e.g. Star 21's
+    double-deck table has no 7-7-7 categories at all, so a 7-7-7 key only
+    ever touches the standard table; a key both tables share, like
+    'unsuited21', updates both, so the payout stays consistent regardless
+    of how many decks happen to be in the shoe later)."""
+    bet_key = {"powerpoker": "power_poker", "star21": "star21", "buster": "dealer_buster"}[head]
+    label = _SIDEBET_LABELS[bet_key]
+    usage = f"Usage: {head} <category> <payout>"
+    category_key = rest[0]
+    payout = _parse_float(_require(rest, 1, usage), "payout")
+    if payout <= 0:
+        raise CommandError("payout must be positive")
+
+    if bet_key == "power_poker":
+        table_keys = ["power_poker"]
+    elif bet_key == "star21":
+        table_keys = ["star21_standard", "star21_double"]
+    else:
+        table_keys = ["buster_multi", "buster_single"]
+
+    touched = [tk for tk in table_keys if category_key in session.rules.payouts[tk]]
+    if not touched:
+        valid = sorted({k for tk in table_keys for k in session.rules.payouts[tk]})
+        raise CommandError(f"Unknown {label} category '{category_key}'. Valid categories: {', '.join(valid)}")
+    for tk in touched:
+        session.rules.payouts[tk][category_key] = payout
+    return f"{label} '{category_key}' now pays {payout:g}:1"

@@ -1,41 +1,74 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+# Bet-key prefix for sidebet_occurrences' dict keys, e.g. "power_poker:royalflush".
+_OCCURRENCE_KEY = "{bet}:{category}"
 
 
 @dataclass
 class Stats:
     """Lifetime counters (persisted across runs) plus this-session bookkeeping.
 
-    Lifetime: main-wager P/L $, side-bet P/L $, EV% (realized edge on main
-    blackjack wagers only -- side bets have very different variance and
-    would muddy that number), win/loss/push/surrender tallies, and total
-    hands ever played.
+    Lifetime: P/L broken out by main wagers, side bets overall, and Power
+    Poker/Star 21 individually; EV% (realized edge on main blackjack wagers
+    only -- side bets have very different variance and would muddy that
+    number); win/loss/push/surrender tallies; total hands ever played;
+    sessions played; and, for every payout category across all three side
+    bets, how many times it's actually occurred (regardless of whether it
+    was wagered on that round) and how many times it actually paid out (it
+    occurred *and* the player had a wager riding on it) -- see
+    sidebet_occurrences/sidebet_wins, shown in their own per-bet tables on
+    the 'stats' screen to help gauge whether a payout (adjustable via the
+    "<sidebet> <category> <payout>" command) is priced the way you want it.
 
-    Session (reset every run): the same shape as lifetime, plus doubles,
-    splits, and blackjacks dealt to either side.
+    Session (reset every 'newsession'/hardreset): win/loss/push/surrender/
+    double/split tallies, aces- and tens-split counts, Dealer Pulled 21s
+    (the dealer hitting to a non-blackjack 21), player/dealer blackjacks
+    dealt, shoes played, dealer busts, and the player's current win/loss
+    streak (consecutive hands, push/surrender leave it unchanged).
     """
 
+    # ---- Lifetime ----
     hands_lifetime: int = 0
     player_wins: int = 0
     dealer_wins: int = 0
     pushes: int = 0
     surrenders_lifetime: int = 0
-    dealer_busts_8plus: int = 0  # dealer busts on an 8th (or later) card
-    blazing_sevens: int = 0  # Star 21 hits on Suited 7-7-7 Diamonds
-    royal_flushes: int = 0  # Power Poker hits on a suited A-K-Q (Royal Flush) on the deal
+    sessions_played: int = 1
 
     lifetime_main_wagered: float = 0.0  # sum of main-hand bets settled, for EV%
     lifetime_main_pl: float = 0.0
     lifetime_sidebet_pl: float = 0.0
+    lifetime_power_poker_pl: float = 0.0
+    lifetime_star21_pl: float = 0.0
 
+    # "<bet_key>:<category_key>" -> lifetime occurrence count, e.g.
+    # "star21:suited777d" -- covers every category on all three payout
+    # tables (Power Poker, Star 21, Dealer Buster), independent of whether
+    # that spot actually had a wager riding on it.
+    sidebet_occurrences: Dict[str, int] = field(default_factory=dict)
+    # Same keying, but only counts an occurrence that actually paid out --
+    # i.e. it happened *and* the player had a wager on that bet that round.
+    sidebet_wins: Dict[str, int] = field(default_factory=dict)
+
+    # ---- Session ----
     hands_this_session: int = 0
     surrenders: int = 0
     doubles: int = 0
     splits: int = 0
+    aces_split: int = 0  # times the player split a pair of aces (not the # of aces involved)
+    tens_split: int = 0  # times the player split a pair of ten-value cards
     player_blackjacks: int = 0
     dealer_blackjacks: int = 0
+    greg_specials: int = 0  # "Dealer Pulled 21s" -- dealer hits their hand up to a non-blackjack 21
+    dealer_busts: int = 0
+    # Consecutive player_win/dealer_win hands (push/surrender don't touch
+    # it): positive N = an N-hand win streak, negative N = an N-hand losing
+    # streak, 0 = no streak yet this session. Displayed as "W2"/"L3"/"-".
+    current_streak: int = 0
+    shoes_played: int = 1
 
     session_main_pl: float = 0.0
     session_sidebet_pl: float = 0.0
@@ -53,9 +86,11 @@ class Stats:
         if outcome == "player_win":
             self.player_wins += 1
             self.session_player_wins += 1
+            self.current_streak = self.current_streak + 1 if self.current_streak >= 0 else 1
         elif outcome == "dealer_win":
             self.dealer_wins += 1
             self.session_dealer_wins += 1
+            self.current_streak = self.current_streak - 1 if self.current_streak <= 0 else -1
         elif outcome == "push":
             self.pushes += 1
             self.session_pushes += 1
@@ -63,10 +98,28 @@ class Stats:
             self.surrenders += 1
             self.surrenders_lifetime += 1
 
-    def record_side_bet(self, wager: float, win_amount: float) -> None:
+    def record_side_bet(self, wager: float, win_amount: float, bet_key: Optional[str] = None) -> None:
         pl = win_amount - wager
         self.lifetime_sidebet_pl += pl
         self.session_sidebet_pl += pl
+        if bet_key == "power_poker":
+            self.lifetime_power_poker_pl += pl
+        elif bet_key == "star21":
+            self.lifetime_star21_pl += pl
+
+    def record_sidebet_occurrence(self, bet_key: str, category_key: str) -> None:
+        k = _OCCURRENCE_KEY.format(bet=bet_key, category=category_key)
+        self.sidebet_occurrences[k] = self.sidebet_occurrences.get(k, 0) + 1
+
+    def sidebet_occurrence_count(self, bet_key: str, category_key: str) -> int:
+        return self.sidebet_occurrences.get(_OCCURRENCE_KEY.format(bet=bet_key, category=category_key), 0)
+
+    def record_sidebet_win(self, bet_key: str, category_key: str) -> None:
+        k = _OCCURRENCE_KEY.format(bet=bet_key, category=category_key)
+        self.sidebet_wins[k] = self.sidebet_wins.get(k, 0) + 1
+
+    def sidebet_win_count(self, bet_key: str, category_key: str) -> int:
+        return self.sidebet_wins.get(_OCCURRENCE_KEY.format(bet=bet_key, category=category_key), 0)
 
     def record_double(self) -> None:
         self.doubles += 1
@@ -74,29 +127,42 @@ class Stats:
     def record_split(self) -> None:
         self.splits += 1
 
+    def record_aces_split(self) -> None:
+        self.aces_split += 1
+
+    def record_tens_split(self) -> None:
+        self.tens_split += 1
+
     def record_player_blackjack(self) -> None:
         self.player_blackjacks += 1
 
     def record_dealer_blackjack(self) -> None:
         self.dealer_blackjacks += 1
 
-    def record_dealer_bust_8plus(self) -> None:
-        self.dealer_busts_8plus += 1
+    def record_greg_special(self) -> None:
+        self.greg_specials += 1
 
-    def record_blazing_seven(self) -> None:
-        self.blazing_sevens += 1
+    def record_dealer_bust(self) -> None:
+        self.dealer_busts += 1
 
-    def record_royal_flush(self) -> None:
-        self.royal_flushes += 1
+    def record_shoe_cut(self) -> None:
+        self.shoes_played += 1
 
     def reset_session(self) -> None:
         """Zero every session-scoped counter; lifetime counters are untouched."""
+        self.sessions_played += 1
         self.hands_this_session = 0
         self.surrenders = 0
         self.doubles = 0
         self.splits = 0
+        self.aces_split = 0
+        self.tens_split = 0
         self.player_blackjacks = 0
         self.dealer_blackjacks = 0
+        self.greg_specials = 0
+        self.dealer_busts = 0
+        self.current_streak = 0
+        self.shoes_played = 1
         self.session_main_pl = 0.0
         self.session_sidebet_pl = 0.0
         self.session_player_wins = 0
@@ -110,17 +176,25 @@ class Stats:
         self.dealer_wins = 0
         self.pushes = 0
         self.surrenders_lifetime = 0
-        self.dealer_busts_8plus = 0
-        self.blazing_sevens = 0
-        self.royal_flushes = 0
+        self.sessions_played = 1
         self.lifetime_main_wagered = 0.0
         self.lifetime_main_pl = 0.0
         self.lifetime_sidebet_pl = 0.0
+        self.lifetime_power_poker_pl = 0.0
+        self.lifetime_star21_pl = 0.0
+        self.sidebet_occurrences = {}
+        self.sidebet_wins = {}
 
     def ev_percent(self) -> Optional[float]:
         if self.lifetime_main_wagered <= 0:
             return None
         return self.lifetime_main_pl / self.lifetime_main_wagered * 100.0
+
+    def total_lifetime_pl(self) -> float:
+        return self.lifetime_main_pl + self.lifetime_sidebet_pl
+
+    def session_pl(self) -> float:
+        return self.session_main_pl + self.session_sidebet_pl
 
     def to_dict(self) -> dict:
         return {
@@ -129,12 +203,14 @@ class Stats:
             "dealer_wins": self.dealer_wins,
             "pushes": self.pushes,
             "surrenders_lifetime": self.surrenders_lifetime,
-            "dealer_busts_8plus": self.dealer_busts_8plus,
-            "blazing_sevens": self.blazing_sevens,
-            "royal_flushes": self.royal_flushes,
+            "sessions_played": self.sessions_played,
             "lifetime_main_wagered": self.lifetime_main_wagered,
             "lifetime_main_pl": self.lifetime_main_pl,
             "lifetime_sidebet_pl": self.lifetime_sidebet_pl,
+            "lifetime_power_poker_pl": self.lifetime_power_poker_pl,
+            "lifetime_star21_pl": self.lifetime_star21_pl,
+            "sidebet_occurrences": dict(self.sidebet_occurrences),
+            "sidebet_wins": dict(self.sidebet_wins),
         }
 
     @classmethod
@@ -145,11 +221,26 @@ class Stats:
         stats.dealer_wins = int(data.get("dealer_wins", 0))
         stats.pushes = int(data.get("pushes", 0))
         stats.surrenders_lifetime = int(data.get("surrenders_lifetime", 0))
-        stats.dealer_busts_8plus = int(data.get("dealer_busts_8plus", 0))
-        stats.blazing_sevens = int(data.get("blazing_sevens", 0))
-        stats.royal_flushes = int(data.get("royal_flushes", 0))
+        stats.sessions_played = int(data.get("sessions_played", 1))
         stats.lifetime_main_wagered = float(data.get("lifetime_main_wagered", 0.0))
         stats.lifetime_main_pl = float(data.get("lifetime_main_pl", 0.0))
         stats.lifetime_sidebet_pl = float(data.get("lifetime_sidebet_pl", 0.0))
-        # session fields intentionally left at their fresh defaults (0)
+        stats.lifetime_power_poker_pl = float(data.get("lifetime_power_poker_pl", 0.0))
+        stats.lifetime_star21_pl = float(data.get("lifetime_star21_pl", 0.0))
+        occurrences = data.get("sidebet_occurrences") or {}
+        stats.sidebet_occurrences = {str(k): int(v) for k, v in occurrences.items()}
+        wins = data.get("sidebet_wins") or {}
+        stats.sidebet_wins = {str(k): int(v) for k, v in wins.items()}
+        # Migrate the old, special-cased lifetime counters (pre-dating the
+        # generic per-category tracking) into their equivalent occurrence
+        # keys, so an existing save file doesn't lose that history.
+        legacy = {
+            "dealer_busts_8plus": "dealer_buster:8+",
+            "blazing_sevens": "star21:suited777d",
+            "royal_flushes": "power_poker:royalflush",
+        }
+        for old_key, occ_key in legacy.items():
+            if old_key in data and occ_key not in stats.sidebet_occurrences:
+                stats.sidebet_occurrences[occ_key] = int(data[old_key])
+        # session fields intentionally left at their fresh defaults
         return stats

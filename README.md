@@ -44,13 +44,25 @@ realistic table.
   Even Money?/Double? prompt when one applies) directly below the cards,
   no gap — the main settlement banner — the wager box — the side-bet
   boxes — the side-bet banner. The rare 13+-card overflow ticker moved
-  down below the side-bet banner, out of the way of the main flow.
+  down below the side-bet banner, out of the way of the main flow. A
+  split-ace spot is the one exception to the "collapsed values above the
+  cards" convention above: since every ace-split hand is shown in full at
+  once (see **Multi-hand play & splits** below), each hand's own value
+  sits directly below its own cards, the same relative spot every other
+  hand's value occupies — never collapsed above.
+- **Two dashed dividers close out the table**, splitting the screen into
+  three clear sections stacked top to bottom: the table itself (dealer,
+  spots, wagers, side bets), then the command-line section (the
+  hint/message line and the input line), then the stats/payout panel.
 
 **Configurable table rules** (all changeable live via commands, no restart
 required)
 
 - Number of decks (1–12) and penetration (fraction of the shoe dealt before
-  a reshuffle)
+  a reshuffle) — either a fixed value (`deckpen 0.NN`) or randomized
+  (`deckpen rand`), which re-rolls somewhere in 0.65–0.80 every time a
+  fresh shoe is actually cut, so the cut isn't the exact same depth every
+  single shoe
 - Double after split (DAS)
 - Resplit aces (RSA), with a configurable max resulting hands (2–4), and an
   optional face-down deal for split-ace cards (only while RSA itself is off)
@@ -89,7 +101,11 @@ double options, side bets) applies immediately.
   hands actually had twice the money riding on it.
 - **Split aces** always stand on the single hard total they're actually
   standing on once resolved — a hand that drew a ten-value card after
-  splitting aces shows "\*21\*", never a lingering soft "\*11/21\*".
+  splitting aces shows "\*21\*", never a lingering soft "\*11/21\*". Every
+  ace-split hand (up to 4, with RSA) is shown in full at once, each in its
+  own equal slice of the spot's column, its value directly below its own
+  cards — never collapsed into the above-the-cards chip row non-ace splits
+  use.
 
 **Player actions**
 
@@ -148,7 +164,11 @@ all at once at the end of the round:
 **Side bets**
 
 Three optional side bets, each with its own paytable shown live in the
-stats bar, its own themed wager cell, and its own min/max bet:
+stats bar, its own themed wager cell, and its own min/max bet. Every
+payout figure below is just the shipped default — any of them can be
+adjusted live via `powerpoker`/`star21`/`buster <category> <payout>` (see
+**Command reference**), and the inline paytable updates immediately to
+match, no restart needed.
 
 - **Power Poker** — your first two cards plus the dealer's up-card, scored
   as a 3-card poker hand:
@@ -246,23 +266,48 @@ matching file into `cs-blackjack/sounds/` (see that folder's own
 | File | Plays when |
 |---|---|
 | `card-deal.mp3` | Each card dealt to any hand — the initial deal, a player hit/double/split, or a dealer hit — and each face-down card (the dealer's hole card, a face-down double/RSA card) turning face up. The dealer's own busting card plays this same file, just ~10% louder, instead of `bust-sound.wav`. |
-| `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
+| `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower, **and** any unbeaten player blackjack, the instant its "BLACKJACK" banner shows (an even-money take shows its own "EVEN MONEY" banner instead and doesn't get this). |
 | `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
-| `wager-win.wav` | A round that settles with a positive net return overall. |
+| `wager-win.wav` | A round that settles with a positive net return overall — except when you're only playing one hand and that hand is the blackjack that just played `sidebet-normal-win.wav`: it alone marks the win then, so this one is skipped rather than doubling up on the same event. Playing more than one hand always gets both, since the win sound there is about the round's overall result, not just the one blackjack hand. |
 | `bust-sound.wav` | A player hand busting (a hit, or a face-up double-down), a doubled hand that loses without busting, or a confirmed dealer blackjack (once per round, regardless of push/loss/even-money on any one spot) — not the dealer's own bust. |
 
 A plain main-wager loss, push, or surrender (no double, no bust) stays
-silent; only a win, a bust, a losing double, or a dealer blackjack adds a
-sound beyond the ordinary card-deal ones.
+silent; only a win, a bust, a losing double, a player or dealer blackjack
+adds a sound beyond the ordinary card-deal ones.
 
 **Bankroll and statistics**
 
-- A **lifetime** panel (main-bet P/L $, side-bet P/L $, EV % on main
-  wagers, hands played, wins/losses/pushes/surrenders, 8+ card dealer
-  busts, and Star 21 7-7-7♦ hits) and a **session** panel (bankroll,
-  main/side-bet P/L $, hands played, wins/losses/pushes, surrenders,
-  doubles, splits, and blackjacks dealt this session). Both are saved to
-  disk automatically.
+- A **lifetime** panel and a **session** panel, side by side, both saved to
+  disk automatically — the Main UI shows both in full (2 sub-columns
+  apiece); the full-screen `stats` command shows the same two tables, plus
+  a dedicated payout/occurrence table per side bet underneath them (see
+  below). Every table follows the same convention throughout: names
+  left-aligned, values right-aligned, columns fixed-width so nothing
+  staggers row to row.
+- **Lifetime**: EV % (on main wagers only), total lifetime/main-bet/
+  side-bet P/L $, Power Poker P/L $, Star 21 P/L $, sessions played, total
+  hands dealt, wins/losses/pushes/surrenders.
+- **Session**: player/dealer wins, pushes, surrenders, doubles, splits,
+  Dealer Pulled 21s (the dealer hitting to a non-blackjack 21), player/
+  dealer blackjacks, shoes played, hands dealt, session/main/side-bet
+  P/L $, aces split (the number of times you split a pair of aces, not
+  the number of aces involved), tens split (same, for ten-value pairs),
+  dealer busts, and your **current streak** — "W2"/"L3"-style, a run of
+  consecutive winning or losing hands. A push or surrender doesn't touch
+  it either way; a win or loss either extends the current streak or
+  starts a fresh one in the other direction.
+- **Side-bet tables** (full-screen `stats` only): Power Poker, Star 21,
+  and Buster each get their own table, sorted lowest payout to highest,
+  showing every category's current payout, how many times it's been
+  *dealt* (occurred at all, wagered on or not), and how many times it's
+  actually *won* (occurred **and** you had a wager on it that round). That
+  data exists to help gauge whether a payout (adjustable live — see
+  **Side bets**) is priced the way you want it, not just to show off a
+  big number. Star 21 always shows its full 9-category standard table
+  and Buster its 6-category multi-deck table here, regardless of the
+  shoe's live deck count, so this history reads the same no matter what
+  the table's playing right now — only the *live* inline payout table on
+  the Main UI tracks the deck-count-specific variant actually in effect.
 - Both panels hold their pre-round numbers for the whole round and only
   catch up to the real values once it's fully settled — even though some
   outcomes (an immediate blackjack, a side bet win) are internally decided
@@ -329,7 +374,7 @@ tables — all one keypress away, no need to memorize anything up front.
 - The standard library `curses` module — this ships with Python on Linux
   and macOS; on Windows you'll need to `pip install windows-curses` first
 - A terminal that supports full-screen/maximize (the game sends a maximize
-  escape sequence on launch) and is at least **198x48** — it will refuse to
+  escape sequence on launch) and is at least **193x49** — it will refuse to
   draw the table and show a "too small" message below that size
 
 No third-party packages are required to run the game itself.
@@ -364,6 +409,12 @@ and reloaded automatically the next time you launch.
   deal, once your wagers are set). The command line reads "`[RETURN] to
   Deal`" by default; after a new shoe/session message shows there instead,
   it reverts back to that default 2 seconds later.
+- **Half-dollar wagers**: the main wager cell (not the side bets, which
+  stay whole-dollar) also accepts a decimal point — type e.g. `25.5` and
+  it commits rounded to the nearest 50 cents, same [table min, table max]
+  check as any other wager. That's what lets a $25 bet actually collect
+  its full 3:2 blackjack payout ($37.50) instead of losing the odd fifty
+  cents to a whole-dollar-only bankroll.
 - **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
   Surrender.
 - **Prelim prompts** (shown with their own key hints on screen): early
@@ -389,6 +440,7 @@ and reloaded automatically the next time you launch.
 | `h17` / `s17` | Dealer hits / stands on soft 17 (next shuffle) |
 | `decks N` | Number of decks, 1–12 (next shuffle) |
 | `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle) |
+| `deckpen rand` | Random penetration, 0.65–0.80, re-rolled on every new shoe (next shuffle) |
 | `splitmax N` | Max hands from splitting non-ace pairs |
 | `tablemin N` / `tablemax N` | Table wager limits |
 | `double facedown on/off` | Deal the double-down card face down |
@@ -417,6 +469,15 @@ and reloaded automatically the next time you launch.
 | `powerpoker on/off [minbet N] [maxbet N]` | Requires 3+ decks in the live shoe |
 | `star21 on/off [minbet N] [maxbet N]` | Requires 2+ decks (2 decks uses its own paytable) |
 | `buster on/off [minbet N] [maxbet N]` | No deck restriction; single deck pays 500:1 on an 8+ card bust |
+| `powerpoker <category> <payout>` | Adjust a Power Poker payout, e.g. `powerpoker royalflush 60` |
+| `star21 <category> <payout>` | Adjust a Star 21 payout, e.g. `star21 suited777d 3000` or `star21 unsuited21 9` |
+| `buster <category> <payout>` | Adjust a Dealer Buster payout, e.g. `buster 8+ 300` or `buster 7 50` |
+
+A payout change applies to every table variant that shares that category
+key — e.g. `star21 unsuited21 9` updates both the standard and the
+double-deck Star 21 tables at once, so the odds stay consistent
+regardless of how the deck count changes later. Payouts persist to disk
+like everything else, so they carry over between sessions.
 
 **Shoe / session**
 
