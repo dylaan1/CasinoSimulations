@@ -5,6 +5,10 @@ from typing import Dict
 
 from .sidebets import default_payouts
 
+# "deckpen rand" re-rolls Rules.penetration to somewhere in this range every
+# time a fresh shoe is actually cut -- see GameSession._roll_penetration.
+RANDOM_PENETRATION_RANGE = (0.65, 0.80)
+
 
 def format_blackjack_payout(payout: float) -> str:
     return "3:2" if abs(payout - 1.5) < 1e-9 else "6:5"
@@ -21,6 +25,11 @@ class SideBetRules:
 class Rules:
     num_decks: int = 6
     penetration: float = 0.75  # fraction of shoe dealt before reshuffle
+    # If True, `penetration` above is re-rolled to a random value in
+    # [RANDOM_PENETRATION_RANGE] every time a fresh shoe is actually cut
+    # (see GameSession._roll_penetration) -- set via "deckpen rand"; a plain
+    # "deckpen 0.NN" turns this back off and pins the value to N.
+    random_penetration: bool = False
     das: bool = True  # double after split allowed
     rsa: bool = False  # resplit aces allowed
     rsa_max_hands: int = 4  # max individual hands from resplitting aces (only matters if rsa is on)

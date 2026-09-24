@@ -59,7 +59,10 @@ realistic table.
 required)
 
 - Number of decks (1–12) and penetration (fraction of the shoe dealt before
-  a reshuffle)
+  a reshuffle) — either a fixed value (`deckpen 0.NN`) or randomized
+  (`deckpen rand`), which re-rolls somewhere in 0.65–0.80 every time a
+  fresh shoe is actually cut, so the cut isn't the exact same depth every
+  single shoe
 - Double after split (DAS)
 - Resplit aces (RSA), with a configurable max resulting hands (2–4), and an
   optional face-down deal for split-ace cards (only while RSA itself is off)
@@ -263,39 +266,48 @@ matching file into `cs-blackjack/sounds/` (see that folder's own
 | File | Plays when |
 |---|---|
 | `card-deal.mp3` | Each card dealt to any hand — the initial deal, a player hit/double/split, or a dealer hit — and each face-down card (the dealer's hole card, a face-down double/RSA card) turning face up. The dealer's own busting card plays this same file, just ~10% louder, instead of `bust-sound.wav`. |
-| `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower. |
+| `sidebet-normal-win.wav` | A side-bet win paying 49:1 or lower, **and** any unbeaten player blackjack, the instant its "BLACKJACK" banner shows (an even-money take shows its own "EVEN MONEY" banner instead and doesn't get this). |
 | `sidebet-big-win.wav` | A side-bet win paying 50:1 or higher. |
-| `wager-win.wav` | A round that settles with a positive net return overall. |
+| `wager-win.wav` | A round that settles with a positive net return overall — except when you're only playing one hand and that hand is the blackjack that just played `sidebet-normal-win.wav`: it alone marks the win then, so this one is skipped rather than doubling up on the same event. Playing more than one hand always gets both, since the win sound there is about the round's overall result, not just the one blackjack hand. |
 | `bust-sound.wav` | A player hand busting (a hit, or a face-up double-down), a doubled hand that loses without busting, or a confirmed dealer blackjack (once per round, regardless of push/loss/even-money on any one spot) — not the dealer's own bust. |
 
 A plain main-wager loss, push, or surrender (no double, no bust) stays
-silent; only a win, a bust, a losing double, or a dealer blackjack adds a
-sound beyond the ordinary card-deal ones.
+silent; only a win, a bust, a losing double, a player or dealer blackjack
+adds a sound beyond the ordinary card-deal ones.
 
 **Bankroll and statistics**
 
-- A **lifetime** panel and a **session** panel, both saved to disk
-  automatically. The Main UI shows an abridged Lifetime block (its main
-  P/L/hands/outcome figures, plus 3 highlighted category counters: Suited
-  7-7-7♦, Royal Flushes, and 8+ Card Busts) and the full Session block;
-  the full-screen `stats` command shows every figure in both, unabridged.
+- A **lifetime** panel and a **session** panel, side by side, both saved to
+  disk automatically — the Main UI shows both in full (2 sub-columns
+  apiece); the full-screen `stats` command shows the same two tables, plus
+  a dedicated payout/occurrence table per side bet underneath them (see
+  below). Every table follows the same convention throughout: names
+  left-aligned, values right-aligned, columns fixed-width so nothing
+  staggers row to row.
 - **Lifetime**: EV % (on main wagers only), total lifetime/main-bet/
   side-bet P/L $, Power Poker P/L $, Star 21 P/L $, sessions played, total
-  hands dealt, wins/losses/pushes/surrenders — plus, for every payout
-  category across all three side bets (Power Poker's 5, Star 21's 9,
-  Dealer Buster's 6), how many times it's actually occurred, regardless of
-  whether it was wagered on that round. That per-category occurrence data
-  exists to help gauge whether a payout (adjustable live — see **Side
-  bets**) is priced the way you want it, not just to show off a big
-  number. "Most Cards for Dealer Bust" has no lifetime equivalent (it
-  resets every session) and always reads "–" in this panel.
+  hands dealt, wins/losses/pushes/surrenders.
 - **Session**: player/dealer wins, pushes, surrenders, doubles, splits,
-  Greg Specials (the dealer hitting to a non-blackjack 21), player/dealer
-  blackjacks, shoes played, hands dealt, session/main/side-bet P/L $,
-  aces split (the number of times you split a pair of aces, not the
-  number of aces involved), tens split (same, for ten-value pairs),
-  dealer busts, and the most cards any one of this session's dealer busts
-  took.
+  Dealer Pulled 21s (the dealer hitting to a non-blackjack 21), player/
+  dealer blackjacks, shoes played, hands dealt, session/main/side-bet
+  P/L $, aces split (the number of times you split a pair of aces, not
+  the number of aces involved), tens split (same, for ten-value pairs),
+  dealer busts, and your **current streak** — "W2"/"L3"-style, a run of
+  consecutive winning or losing hands. A push or surrender doesn't touch
+  it either way; a win or loss either extends the current streak or
+  starts a fresh one in the other direction.
+- **Side-bet tables** (full-screen `stats` only): Power Poker, Star 21,
+  and Buster each get their own table, sorted lowest payout to highest,
+  showing every category's current payout, how many times it's been
+  *dealt* (occurred at all, wagered on or not), and how many times it's
+  actually *won* (occurred **and** you had a wager on it that round). That
+  data exists to help gauge whether a payout (adjustable live — see
+  **Side bets**) is priced the way you want it, not just to show off a
+  big number. Star 21 always shows its full 9-category standard table
+  and Buster its 6-category multi-deck table here, regardless of the
+  shoe's live deck count, so this history reads the same no matter what
+  the table's playing right now — only the *live* inline payout table on
+  the Main UI tracks the deck-count-specific variant actually in effect.
 - Both panels hold their pre-round numbers for the whole round and only
   catch up to the real values once it's fully settled — even though some
   outcomes (an immediate blackjack, a side bet win) are internally decided
@@ -397,6 +409,12 @@ and reloaded automatically the next time you launch.
   deal, once your wagers are set). The command line reads "`[RETURN] to
   Deal`" by default; after a new shoe/session message shows there instead,
   it reverts back to that default 2 seconds later.
+- **Half-dollar wagers**: the main wager cell (not the side bets, which
+  stay whole-dollar) also accepts a decimal point — type e.g. `25.5` and
+  it commits rounded to the nearest 50 cents, same [table min, table max]
+  check as any other wager. That's what lets a $25 bet actually collect
+  its full 3:2 blackjack payout ($37.50) instead of losing the odd fifty
+  cents to a whole-dollar-only bankroll.
 - **In a hand**: `SPACE` Hit, `RETURN` Stand, `D` Double, `P` Split, `S`
   Surrender.
 - **Prelim prompts** (shown with their own key hints on screen): early
@@ -422,6 +440,7 @@ and reloaded automatically the next time you launch.
 | `h17` / `s17` | Dealer hits / stands on soft 17 (next shuffle) |
 | `decks N` | Number of decks, 1–12 (next shuffle) |
 | `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle) |
+| `deckpen rand` | Random penetration, 0.65–0.80, re-rolled on every new shoe (next shuffle) |
 | `splitmax N` | Max hands from splitting non-ace pairs |
 | `tablemin N` / `tablemax N` | Table wager limits |
 | `double facedown on/off` | Deal the double-down card face down |

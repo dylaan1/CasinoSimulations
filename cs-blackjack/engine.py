@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
@@ -8,7 +9,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
-from .rules import Rules
+from .rules import RANDOM_PENETRATION_RANGE, Rules
 from .sidebets import (
     buster_table_key,
     evaluate_dealer_buster,
@@ -217,6 +218,17 @@ class GameSession:
     def quit_requested(self) -> bool:
         return self._quit
 
+    def _roll_penetration(self) -> None:
+        """Re-rolls rules.penetration to a fresh random value (see
+        "deckpen rand") right before a new shoe is actually cut -- a no-op
+        unless that mode is on. Setting it here, immediately before the new
+        Shoe is built from the same field, means the shoe's own penetration
+        always matches rules.penetration right after the cut, so this never
+        trips has_pending_rule_changes the way a mid-shoe rule edit would."""
+        if self.rules.random_penetration:
+            lo, hi = RANDOM_PENETRATION_RANGE
+            self.rules.penetration = round(random.uniform(lo, hi), 2)
+
     def ensure_shoe_ready(self) -> bool:
         """Cut a fresh shoe if penetration was reached (or too few cards remain).
 
@@ -228,6 +240,7 @@ class GameSession:
         an already-placed bet.
         """
         if self.shoe.penetration_reached or self.shoe.cards_remaining < 15:
+            self._roll_penetration()
             self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
             self._enforce_sidebet_deck_gate()
             self._commit_active_rules()
@@ -237,6 +250,7 @@ class GameSession:
 
     def reset_shoe(self) -> None:
         """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
+        self._roll_penetration()
         self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
         self._enforce_sidebet_deck_gate()
         self._commit_active_rules()
@@ -894,6 +908,7 @@ class Round:
                 # purely as an event (to inform future payout tuning),
                 # independent of the side bet's own win/loss bookkeeping.
                 outcome = fn(player_cards, self.dealer_up, payouts)
+                category_key = None
                 if outcome:
                     category_key, label, multiplier = outcome
                     self.session.stats.record_sidebet_occurrence(key, category_key)
@@ -906,6 +921,7 @@ class Round:
                 win = wager * (1 + multiplier) if outcome else 0.0
                 if win:
                     self.session.adjust_bankroll(win)
+                    self.session.stats.record_sidebet_win(key, category_key)
                 self.session.stats.record_side_bet(wager, win, bet_key=key)
                 self.side_bet_results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
 
@@ -933,6 +949,7 @@ class Round:
         recorded -- exactly once per round, not once per spot."""
         payouts = self.rules.payouts[buster_table_key(self.session.shoe.num_decks)]
         outcome = evaluate_dealer_buster(self.dealer_hand, payouts)
+        category_key = None
         if outcome:
             category_key, label, multiplier = outcome
             self.session.stats.record_sidebet_occurrence("dealer_buster", category_key)
@@ -945,6 +962,7 @@ class Round:
             win = buster_wager * (1 + multiplier) if outcome else 0.0
             if win:
                 self.session.adjust_bankroll(win)
+                self.session.stats.record_sidebet_win("dealer_buster", category_key)
             self.session.stats.record_side_bet(buster_wager, win)
             self.side_bet_results.append(
                 SideBetResult(spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win)
@@ -962,7 +980,7 @@ class Round:
             # than being dealt it outright.
             self.session.stats.record_greg_special()
         if dealer_bust:
-            self.session.stats.record_dealer_bust(len(self.dealer_hand.cards))
+            self.session.stats.record_dealer_bust()
 
         for spot in self.spots:
             for hand in spot.hands:

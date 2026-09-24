@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING, List
 
+from .rules import RANDOM_PENETRATION_RANGE
 from .sidebets import side_bet_allowed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -23,6 +24,7 @@ HELP_LINES = [
     "  h17  /  s17                    Dealer hits / stands on soft 17 (next shuffle)",
     "  decks N                        Number of decks, 1-12 (next shuffle)",
     "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
+    "  deckpen rand                   Random penetration (0.65-0.80) re-rolled on every new shoe",
     "  splitmax N                     Max hands from splitting non-ace pairs",
     "  tablemin N  /  tablemax N      Table wager limits",
     "  double facedown on/off         Deal the double-down card face down",
@@ -186,9 +188,15 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         return f"Shoe will use {n} deck(s) starting next shuffle"
 
     if head == "deckpen":
-        p = _parse_float(_require(rest, 0, "deckpen 0.NN"), "deckpen")
+        arg = _require(rest, 0, "deckpen 0.NN or deckpen rand")
+        if arg == "rand":
+            rules.random_penetration = True
+            lo, hi = RANDOM_PENETRATION_RANGE
+            return f"Deck penetration randomized {lo:.2f}-{hi:.2f}, re-rolled on every new shoe (takes effect next shuffle)"
+        p = _parse_float(arg, "deckpen")
         if not (0.1 <= p <= 1.0):
             raise CommandError("deckpen must be between 0.1 and 1.0")
+        rules.random_penetration = False
         rules.penetration = p
         return f"Deck penetration set to {p:.2f} (takes effect next shuffle)"
 

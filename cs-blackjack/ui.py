@@ -76,9 +76,8 @@ MIN_COL_WIDTH = max(CARD_ROW_WIDTH, SIDEBET_GROUP_W, MAIN_WAGER_BOX_W)
 
 # ---- Stats panel ----
 STATS_SESSION_ROWS = 9  # per sub-column (2 sub-columns) -- full Session Stats table, Main UI and Stats screen alike
-STATS_LIFETIME_MAIN_ROWS = 8  # per sub-column (2 sub-columns) -- abridged Main-UI Lifetime block
-STATS_LIFETIME_GROUP_ROWS = 12  # per group (3 groups) -- tallest group in the full Stats-screen Lifetime table
-STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_MAIN_ROWS)  # Main-UI row budget (session vs. abridged lifetime)
+STATS_LIFETIME_ROWS = 6  # per sub-column (2 sub-columns) -- full Lifetime Stats table, Main UI and Stats screen alike
+STATS_MAX_ROWS = max(STATS_SESSION_ROWS, STATS_LIFETIME_ROWS)  # Main-UI row budget (session vs. lifetime blocks)
 
 # Side-bet paytables shown inline on the Main UI, built live from the
 # player-adjustable session.rules.payouts dict (see payout_tables_for()
@@ -500,6 +499,13 @@ def money(x: float) -> str:
     return f"${x:,.2f}"
 
 
+def _wager_text(amount: float) -> str:
+    """Whole-dollar wagers show with no decimals, same as before; a
+    half-dollar main wager shows its one decimal ("25.5"), never trailing
+    zeros -- side-bet wagers never reach this since they stay whole-dollar."""
+    return f"{amount:,.0f}" if amount == int(amount) else f"{amount:,.1f}"
+
+
 def rules_summary(session: GameSession) -> str:
     # Every field on this line is next-shuffle-only -- shows the shoe/rules
     # actually in effect right now (shoe.num_decks/penetration, session.
@@ -565,46 +571,21 @@ def _signed_money(x: float) -> str:
     return f"{'+' if x >= 0 else ''}{money(x)}"
 
 
-# Display labels for the per-category lifetime occurrence counters, keyed
-# the same way Stats.sidebet_occurrence_count() is -- these are the Lifetime
-# Stats table's own wording (plural "Busts"/"Flushes", "3-of-a-Kinds
-# (Trips)"), distinct from sidebets.py's singular in-game banner/payout-table
-# labels ("Flush", "Trips", "8+ Card Bust"), which stay as they are.
-_LIFETIME_CATEGORY_LABELS: Dict[Tuple[str, str], str] = {
-    ("power_poker", "royalflush"): "Royal Flushes",
-    ("power_poker", "straightflush"): "Straight Flushes",
-    ("power_poker", "trips"): "3-of-a-Kinds (Trips)",
-    ("power_poker", "straight"): "Straights",
-    ("power_poker", "flush"): "Flushes",
-    ("dealer_buster", "8+"): "8+ Card Busts",
-    ("dealer_buster", "7"): "7 Card Busts",
-    ("dealer_buster", "6"): "6 Card Busts",
-    ("dealer_buster", "5"): "5 Card Busts",
-    ("dealer_buster", "4"): "4 Card Busts",
-    ("dealer_buster", "3"): "3 Card Busts",
-    ("star21", "suited777d"): "Suited 7-7-7♦",
-    ("star21", "suited777"): "Suited 7-7-7",
-    ("star21", "suited678"): "Suited 6-7-8",
-    ("star21", "unsuited777"): "Unsuited 7-7-7",
-    ("star21", "suited21"): "Suited 21",
-    ("star21", "unsuited678"): "Unsuited 6-7-8",
-    ("star21", "unsuited21"): "Unsuited 21",
-    ("star21", "any20"): "Any 20",
-    ("star21", "any19"): "Any 19",
-}
+def _streak_text(s: Stats) -> str:
+    if s.current_streak > 0:
+        return f"W{s.current_streak}"
+    if s.current_streak < 0:
+        return f"L{-s.current_streak}"
+    return "-"
 
 
-def lifetime_stats_groups(
-    s: Stats,
-) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """The full Lifetime Stats table, unabridged, as 3 side-by-side groups:
-    (A) overall P/L and hand tallies, (B) Power Poker's 5 categories +
-    Dealer Buster's 6 + a placeholder row for the session-only "Most Cards
-    for Dealer Bust" (no lifetime equivalent exists, so it always reads
-    "-" here -- see session_stats_columns for its real, session-scoped
-    value), (C) Star 21's 9 standard-table categories."""
+def lifetime_stats_columns(s: Stats) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    """The full Lifetime Stats table (2x6), shown unabridged on both the
+    Main UI and the 'stats' full-screen command -- overall P/L and hand
+    tallies only. Per-category side-bet occurrence/win data lives in its
+    own dedicated per-bet tables instead -- see sidebet_stats_tables()."""
     ev = s.ev_percent()
-    group_a = [
+    rows = [
         ("EV %", f"{ev:+.2f}%" if ev is not None else "N/A"),
         ("Total Lifetime P/L $", _signed_money(s.total_lifetime_pl())),
         ("Total Main Bet P/L $", _signed_money(s.lifetime_main_pl)),
@@ -618,33 +599,7 @@ def lifetime_stats_groups(
         ("Pushes", str(s.pushes)),
         ("Surrenders", str(s.surrenders_lifetime)),
     ]
-    group_b = (
-        [
-            (_LIFETIME_CATEGORY_LABELS[("power_poker", key)], str(s.sidebet_occurrence_count("power_poker", key)))
-            for key, _label in POWER_POKER_CATEGORIES
-        ]
-        + [
-            (_LIFETIME_CATEGORY_LABELS[("dealer_buster", key)], str(s.sidebet_occurrence_count("dealer_buster", key)))
-            for key, _label in BUSTER_CATEGORIES
-        ]
-        + [("Most Cards for Dealer Bust", "-")]
-    )
-    group_c = [
-        (_LIFETIME_CATEGORY_LABELS[("star21", key)], str(s.sidebet_occurrence_count("star21", key)))
-        for key, _label in STAR21_STANDARD_CATEGORIES
-    ]
-    return group_a, group_b, group_c
-
-
-def lifetime_stats_main_ui_columns(s: Stats) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """The abridged Lifetime block shown on the Main UI: group A in full,
-    plus 3 highlighted category counters (Suited 7-7-7♦, Royal Flushes,
-    8+ Card Busts), split into 2 sub-columns of up to 8 rows each -- the
-    full breakdown lives on the 'stats' full-screen command instead."""
-    group_a, group_b, group_c = lifetime_stats_groups(s)
-    extras = [group_c[0], group_b[0], group_b[5]]  # Suited 7-7-7♦, Royal Flushes, 8+ Card Busts
-    rows = group_a + extras
-    return rows[:STATS_LIFETIME_MAIN_ROWS], rows[STATS_LIFETIME_MAIN_ROWS:]
+    return rows[:STATS_LIFETIME_ROWS], rows[STATS_LIFETIME_ROWS:]
 
 
 def session_stats_columns(s: Stats) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
@@ -657,7 +612,7 @@ def session_stats_columns(s: Stats) -> Tuple[List[Tuple[str, str]], List[Tuple[s
         ("Surrenders", str(s.surrenders)),
         ("Doubles", str(s.doubles)),
         ("Splits", str(s.splits)),
-        ("Greg Specials", str(s.greg_specials)),
+        ("Dealer Pulled 21s", str(s.greg_specials)),
         ("Player Blackjacks", str(s.player_blackjacks)),
         ("Dealer Blackjacks", str(s.dealer_blackjacks)),
     ]
@@ -670,9 +625,48 @@ def session_stats_columns(s: Stats) -> Tuple[List[Tuple[str, str]], List[Tuple[s
         ("Aces Split", str(s.aces_split)),
         ("Tens Split", str(s.tens_split)),
         ("Dealer Busts", str(s.dealer_busts)),
-        ("Most Cards for Dealer Bust", str(s.most_cards_for_dealer_bust)),
+        ("Current Streak", _streak_text(s)),
     ]
     return col1, col2
+
+
+# One dedicated table per side bet on the 'stats' screen: category name,
+# payout, how many times it's been dealt (occurred at all, wagered or
+# not), and how many times it actually won (occurred *and* the player had
+# a wager riding on it). Star 21 always shows its full 9-category standard
+# table and Buster its 6-category multi-deck table, regardless of the
+# shoe's live deck count, so this lifetime history reads the same no
+# matter what the table's playing right now -- only the *live* inline
+# payout tables (see payout_tables_for) track the deck-count-specific
+# variant actually in effect.
+SIDEBET_STATS_TABLES = (
+    ("power_poker", "power_poker", "POWER POKER"),
+    ("star21", "star21_standard", "STAR 21"),
+    ("dealer_buster", "buster_multi", "BUSTER"),
+)
+
+
+def sidebet_stats_tables(
+    payouts: Dict[str, Dict[str, float]], s: Stats
+) -> List[Tuple[str, List[Tuple[str, str, str, str]]]]:
+    """Returns [(title, rows)] for the 3 side bets, each row a (category,
+    payout, dealt, won) tuple, sorted lowest payout to highest."""
+    tables: List[Tuple[str, List[Tuple[str, str, str, str]]]] = []
+    for bet_key, table_key, title in SIDEBET_STATS_TABLES:
+        table_payouts = payouts[table_key]
+        raw = [
+            (
+                _fold_diamonds(label),
+                table_payouts[key],
+                s.sidebet_occurrence_count(bet_key, key),
+                s.sidebet_win_count(bet_key, key),
+            )
+            for key, label in categories_for_table(table_key)
+        ]
+        raw.sort(key=lambda row: row[1])
+        rows = [(name, f"{payout:g}:1", str(dealt), str(won)) for name, payout, dealt, won in raw]
+        tables.append((title, rows))
+    return tables
 
 
 def _draw_box(win, y: int, x: int, width: int, dim: bool = False) -> None:
@@ -700,9 +694,9 @@ def _draw_wager_cell(
     if is_focused and bet_edit_buffer:
         text = bet_edit_buffer
     elif round_ is not None and col < len(round_.spots):
-        text = f"{sum(h.bet for h in round_.spots[col].hands):,.0f}"
+        text = _wager_text(sum(h.bet for h in round_.spots[col].hands))
     else:
-        text = f"{session.wagers[col]:,.0f}"
+        text = _wager_text(session.wagers[col])
     _draw_box(win, box_y, box_x, MAIN_WAGER_BOX_W, dim=dim)
     attr = curses.A_REVERSE if is_focused else (curses.A_DIM if dim else 0)
     _safe_addstr(win, box_y + 1, _center_x_right_bias(text, MAIN_WAGER_BOX_W - 2, box_x + 1), text, attr)
@@ -1384,12 +1378,11 @@ def render(
     cell_rects["cli"] = (input_y, left_margin, 1, max(1, usable_width))
 
     # ---- Stats panel: the 3 side-bet payout tables side by side on the
-    # left, Session (2x9, full) and Lifetime (2x8, abridged -- group A plus
-    # 3 highlighted category counters) sharing the rest -- the unabridged
-    # Lifetime breakdown (all 3 groups) is only on the full-screen 'stats'
-    # command. Every column here follows the same convention: name
-    # left-aligned, value right-aligned, so long $ P/L figures never crowd
-    # the label. ----
+    # left, Session (2x9) and Lifetime (2x6) stats sharing the rest -- the
+    # per-category side-bet occurrence/win data (its own dedicated tables)
+    # is only on the full-screen 'stats' command, not here. Every column
+    # here follows the same convention: name left-aligned, value
+    # right-aligned, so long $ P/L figures never crowd the label. ----
     divider_y = input_y + 2
     _safe_addstr(win, divider_y, left_margin, "-" * max(usable_width, 0))
     stats_y = divider_y + 1
@@ -1413,7 +1406,7 @@ def render(
 
     display_stats = _display_stats(session, round_, animating)
     sess_a, sess_b = session_stats_columns(display_stats)
-    life_a, life_b = lifetime_stats_main_ui_columns(display_stats)
+    life_a, life_b = lifetime_stats_columns(display_stats)
 
     # A single-column gap sits between each table's own two sub-columns
     # (session's names+values vs. its second names+values, and likewise
@@ -1478,10 +1471,11 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
     shoe = session.shoe
     active = session.active_rules
     table_range = f"${r.table_min:,.0f}-${r.table_max:,.0f}" if r.table_min > 0 else f"${r.table_max:,.0f} max"
+    pen_suffix = "  (random, re-rolled every new shoe)" if r.random_penetration else ""
     lines = [
         "GAME RULES",
         f"  Decks:               {shoe.num_decks}",
-        f"  Penetration:         {shoe.penetration:.0%}",
+        f"  Penetration:         {shoe.penetration:.0%}{pen_suffix}",
         f"  Blackjack pays:      {format_blackjack_payout(active.blackjack_payout)}",
         f"  Dealer Soft 17:      {'Hits' if active.hit_soft_17 else 'Stands'}",
         f"  Double After Split:  {'ON' if r.das else 'OFF'}",
@@ -1522,30 +1516,60 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
 
 
 def render_stats_screen(stdscr, session: GameSession, round_: Optional[Round]) -> None:
-    """Unabridged version of the Main UI's stats blocks: every Lifetime
-    Stats group in full (not just the abridged 2x8 highlight block shown
-    there) alongside the full 2x9 Session Stats table -- same single-column
-    gap between each table's own sub-columns, a wider gap between the two
-    tables themselves (here, stacked vertically rather than side by side,
-    so that gap is a couple of blank lines instead of blank columns)."""
+    """Lifetime Stats and Session Stats side by side on top (each its own
+    2-sub-column table, single-column gap within a table, a wider gap
+    between the two tables); Power Poker/Star 21/Buster side by side
+    beneath that, each its own 4-column (category/payout/dealt/won) table.
+    Every column is fixed-width, name left-aligned and value right-aligned,
+    the same convention throughout -- nothing staggers row to row."""
     display_stats = _display_stats(session, round_)
-    label_w, value_w = 26, 8
+    label_w, value_w = 22, 9
     inner_gap = " " * STATS_INNER_GAP
+    table_gap = " " * STATS_TABLE_GAP
+    table_w = label_w + value_w  # one table's own single sub-column width
 
-    def row(cells: List[Tuple[str, str]]) -> str:
-        return "  " + inner_gap.join(f"{label:<{label_w}}{value:>{value_w}}" for label, value in cells)
+    def cell(row_: Tuple[str, str]) -> str:
+        label, value = row_
+        return f"{label:<{label_w}}{value:>{value_w}}"
 
-    lines: List[str] = ["LIFETIME STATS"]
-    groups = lifetime_stats_groups(display_stats)
-    for i in range(STATS_LIFETIME_GROUP_ROWS):
-        lines.append(row([g[i] if i < len(g) else ("", "") for g in groups]))
+    lines: List[str] = []
+
+    # ---- Lifetime Stats | Session Stats, side by side ----
+    block_w = 2 * table_w + STATS_INNER_GAP  # a table's own 2 sub-columns, together
+    lines.append(f"{'LIFETIME STATS':<{block_w}}{table_gap}{'SESSION STATS'}")
+    life_a, life_b = lifetime_stats_columns(display_stats)
+    sess_a, sess_b = session_stats_columns(display_stats)
+    for i in range(max(len(life_a), len(sess_a))):
+        la = life_a[i] if i < len(life_a) else ("", "")
+        lb = life_b[i] if i < len(life_b) else ("", "")
+        sa = sess_a[i] if i < len(sess_a) else ("", "")
+        sb = sess_b[i] if i < len(sess_b) else ("", "")
+        lines.append("  " + cell(la) + inner_gap + cell(lb) + table_gap + cell(sa) + inner_gap + cell(sb))
 
     lines.append("")
     lines.append("")
-    lines.append("SESSION STATS")
-    col1, col2 = session_stats_columns(display_stats)
-    for i in range(STATS_SESSION_ROWS):
-        lines.append(row([col1[i], col2[i]]))
+
+    # ---- Power Poker | Star 21 | Buster, side by side by side, each its
+    # own category/payout/dealt/won table sorted lowest payout to highest ----
+    name_w, payout_w, dealt_w, won_w = 20, 8, 7, 7
+    sb_table_w = name_w + payout_w + dealt_w + won_w
+
+    def sb_cell(row_: Tuple[str, str, str, str]) -> str:
+        name, payout, dealt, won = row_
+        return f"{name:<{name_w}}{payout:>{payout_w}}{dealt:>{dealt_w}}{won:>{won_w}}"
+
+    sidebet_tables = sidebet_stats_tables(session.rules.payouts, display_stats)
+    lines.append(table_gap.join(f"{title:<{sb_table_w}}" for title, _rows in sidebet_tables).rstrip())
+    lines.append(
+        "  "
+        + table_gap.join(f"{'Category':<{name_w}}{'Payout':>{payout_w}}{'Dealt':>{dealt_w}}{'Won':>{won_w}}" for _ in sidebet_tables)
+    )
+    max_rows = max(len(rows) for _title, rows in sidebet_tables)
+    for i in range(max_rows):
+        cells = []
+        for _title, rows in sidebet_tables:
+            cells.append(sb_cell(rows[i]) if i < len(rows) else " " * sb_table_w)
+        lines.append("  " + table_gap.join(cells))
 
     _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
 
@@ -1739,7 +1763,20 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         round_.reveal_doubles()
     if round_ is not None and round_.phase == Phase.SETTLED:
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
-        if _net_return(round_) > 0:
+        # A single-hand round's own blackjack already got its highlight
+        # sound (sidebet-normal-win.wav) the moment its BLACKJACK banner
+        # showed -- see announce_new_settlement_sounds. Playing wager-win.wav
+        # too would double up on what's really one event; a multi-hand round
+        # still gets both, since the win sound there is about the round's
+        # overall result, not just the one blackjack hand. An even-money
+        # take shows its own "EVEN MONEY" banner instead (never "BLACKJACK"),
+        # so it's excluded here too -- wager-win.wav is the only win sound
+        # for that outcome, same as before.
+        single_hand_blackjack = session.rules.num_hands == 1 and any(
+            r.hand.is_blackjack and r.outcome == "player_win" and not r.hand.even_money_taken
+            for r in round_.results
+        )
+        if _net_return(round_) > 0 and not single_hand_blackjack:
             sound.play(sound.WAGER_WIN)
         # No summary text needed here -- the per-spot settlement/side-bet
         # banner rows already show every hand's outcome, and _main's own
@@ -1835,6 +1872,15 @@ def _main(stdscr) -> None:
         for result in round_.results[sound_results_announced:]:
             if result.hand.is_bust or (result.hand.doubled and result.outcome == "dealer_win"):
                 sound.play(sound.BUST)
+            # Highlights a player blackjack the instant its own "BLACKJACK"
+            # settlement banner shows (see _spot_settlement_banner) -- an
+            # even-money take shows "EVEN MONEY" there instead, so it's
+            # deliberately excluded here too. On a single-hand round, this
+            # sound alone marks the win; _after_engine_change's SETTLED
+            # handling skips wager-win.wav in that specific case so the two
+            # sounds don't double up on what's really one highlighted event.
+            if result.hand.is_blackjack and result.outcome == "player_win" and not result.hand.even_money_taken:
+                sound.play(sound.SIDEBET_NORMAL_WIN)
         sound_results_announced = len(round_.results)
         # Fires once per round, the instant the peek confirms the dealer's
         # blackjack -- independent of what any individual spot does with it
@@ -1873,6 +1919,10 @@ def _main(stdscr) -> None:
         message = ""
         amount = float(bet_edit_buffer)
         if bet_row == 0:
+            # Main wager only -- half-dollar increments, so a typed "25.3"
+            # or "25.7" both land on the nearest half dollar rather than
+            # requiring the player to type the fraction exactly.
+            amount = round(amount * 2) / 2
             err = session.try_set_wager(bet_col, amount)
             if not err:
                 # Funding (or clearing) a spot via the grid is, on its own,
@@ -2142,6 +2192,22 @@ def _main(stdscr) -> None:
                 max_len = WAGER_MAX_LEN if bet_row == 0 else SIDEBET_MAX_LEN
                 if input_focus == "wager" and ord("0") <= ch <= ord("9") and len(bet_edit_buffer) < max_len:
                     bet_edit_buffer += chr(ch)
+                    continue
+                # Half-dollar increments are only meaningful on the main
+                # wager (side bets always settle in whole dollars) -- one
+                # decimal point, typed anywhere after at least one digit;
+                # commit_bet_cell() rounds the final amount to the nearest
+                # 0.5 either way, so this is just about letting "." register
+                # as a keystroke, not about validating the fraction itself.
+                if (
+                    input_focus == "wager"
+                    and bet_row == 0
+                    and ch == ord(".")
+                    and bet_edit_buffer
+                    and "." not in bet_edit_buffer
+                    and len(bet_edit_buffer) < max_len
+                ):
+                    bet_edit_buffer += "."
                     continue
                 if input_focus == "wager" and ch in (curses.KEY_BACKSPACE, 127, 8) and bet_edit_buffer:
                     bet_edit_buffer = bet_edit_buffer[:-1]
