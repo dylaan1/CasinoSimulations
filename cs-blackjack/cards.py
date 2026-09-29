@@ -78,6 +78,9 @@ class Shoe:
 
     num_decks: int
     penetration: float = 0.75
+    # The shoe is cut when fewer than this many cards would be left for the
+    # next round, whatever `penetration` says (see needs_cut).
+    min_cards_left: int = 15
     _cards: List[Card] = field(default_factory=list, init=False)
     # The whole shuffle in the order it will be dealt (first card dealt
     # first), frozen when the shoe is shuffled and kept only in memory --
@@ -144,3 +147,39 @@ class Shoe:
     @property
     def penetration_reached(self) -> bool:
         return self.cards_dealt / self.total_cards >= self.penetration
+
+    @property
+    def needs_cut(self) -> bool:
+        """True once the cut card has been reached, or too few cards remain
+        for another round -- whichever comes first."""
+        return self.penetration_reached or self.cards_remaining < self.min_cards_left
+
+    @property
+    def effective_penetration(self) -> float:
+        """How deep this shoe is really cut, as a fraction of the shoe: the
+        penetration setting, or -- when that would leave fewer than
+        min_cards_left cards -- the depth that leaves exactly that many."""
+        return min(self.penetration, (self.total_cards - self.min_cards_left) / self.total_cards)
+
+    def reshuffle_around(self, table_cards: List[Card]) -> None:
+        """The failsafe for a shoe that runs dry mid-round: shuffle every card
+        that ISN'T on the table back into a fresh order, and carry on dealing
+        from it -- exactly what a dealer does with the discards. Rebuilds this
+        Shoe in place (a round's dealer loop holds a reference to it), and
+        treats the cards on the table as already dealt from the new shuffle,
+        so the running count is simply their Hi-Lo total and cards_dealt is
+        how many there are.
+
+        table_cards must be every card drawn so far in the round, in the
+        order they were drawn; each must belong to this shoe's decks."""
+        rest = [Card(rank, suit) for rank in RANKS for suit in SUITS] * self.num_decks
+        for card in table_cards:
+            rest.remove(card)  # ValueError if a card isn't in the shoe: the caller's bookkeeping is wrong
+        random.shuffle(rest)
+        self._cards = rest
+        self._initial_order = list(table_cards) + rest[::-1]  # the table cards, then the new deal order
+        self.drawn_counts = {rank: 0 for rank in RANKS}
+        for card in table_cards:
+            self.drawn_counts[card.rank] += 1
+        self.running_count = sum(hilo_value(card) for card in table_cards)
+        self.cards_dealt = len(table_cards)

@@ -9,24 +9,41 @@ from .sidebets import default_payouts
 # time a fresh shoe is actually cut -- see GameSession._roll_penetration.
 RANDOM_PENETRATION_RANGE = (0.65, 0.80)
 
-# A single-deck shoe is small enough for a round to run out of cards
-# part-way through (the dealer's hand included), so it's held to tighter
-# limits than a multi-deck one: at most SINGLE_DECK_MAX_HANDS hands, the
-# same number every round of that shoe (see GameSession.try_set_num_hands),
-# and a cut card no deeper than this -- by number of hands -- which leaves
-# 13 (one hand) or about 21 (two hands) cards behind the cut card for the
-# last round to finish with.
+# A round can run out of cards part-way through (the dealer's hand included)
+# if a shoe is cut too deep for the number of hands in play. If it ever does,
+# the discards are shuffled back in and the round finishes (see
+# Round._draw / GameSession.reshuffle_mid_round) -- the same thing a casino
+# does -- but the rules below make that a rarity:
 #
-# Splitting is held to one split per hand too: a pair split into up to four
-# hands, each hit repeatedly, is what still ran a single deck dry once the
-# limits above were in place (see GameSession.split_hand_limit).
+# Every shoe is cut when fewer than a minimum number of cards would be left
+# for the next round (min_cards_to_deal below): 24 on a single deck, 15 on two
+# decks -- which are also never cut deeper than DOUBLE_DECK_MAX_PENETRATION --
+# and on three or more decks an amount that grows with the number of hands in
+# play. The per-hand figures come from measurement: over 200,000 simulated
+# rounds each, the most cards one round ever used was 14/21/24 (1/2/3 hands,
+# basic strategy) and 25/37/44 for a player who splits and hits everything.
+MIN_CARDS_TO_DEAL = 15
+SINGLE_DECK_MIN_CARDS = 24
+DOUBLE_DECK_MAX_PENETRATION = 0.80
+MULTI_DECK_MIN_CARDS_BASE = 16
+MULTI_DECK_MIN_CARDS_PER_HAND = 12  # 16 + 12/hand = 28, 40, 52 cards for 1, 2, 3 hands
+
+
+def min_cards_to_deal(num_decks: int, num_hands: int) -> int:
+    """Fewest cards a `num_decks` shoe may be left with before it's cut, given
+    the number of hands being played."""
+    if num_decks == 1:
+        return SINGLE_DECK_MIN_CARDS
+    if num_decks == 2:
+        return MIN_CARDS_TO_DEAL
+    return MULTI_DECK_MIN_CARDS_BASE + MULTI_DECK_MIN_CARDS_PER_HAND * max(num_hands, 1)
+
+# A single deck is also held to fewer hands: at most SINGLE_DECK_MAX_HANDS
+# hands per round (1 or 2, changeable any time), and one split per hand -- a
+# pair split into up to four hands, each hit repeatedly, is what used to run
+# a single deck dry (see GameSession.split_hand_limit).
 SINGLE_DECK_MAX_HANDS = 2
 SINGLE_DECK_MAX_SPLIT_HANDS = 2  # hands one spot may split into: the original plus one split
-SINGLE_DECK_MAX_PENETRATION = {1: 0.75, 2: 0.60}
-
-
-def single_deck_penetration_cap(hands: int) -> float:
-    return SINGLE_DECK_MAX_PENETRATION[min(max(hands, 1), SINGLE_DECK_MAX_HANDS)]
 
 
 def format_blackjack_payout(payout: float) -> str:

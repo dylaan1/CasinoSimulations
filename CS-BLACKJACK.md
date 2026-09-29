@@ -62,8 +62,9 @@ required)
   a reshuffle) — either a fixed value (`deckpen 0.NN`) or randomized
   (`deckpen rand`), which re-rolls somewhere in 0.65–0.80 every time a
   fresh shoe is actually cut, so the cut isn't the exact same depth every
-  single shoe. A single-deck shoe is cut no deeper than 75% (60% with two
-  hands) — see **Single-deck limits** below
+  single shoe. A single deck is cut once fewer than 24 cards would be left,
+  and a two-deck shoe is never cut deeper than 80% — see **Deck-size limits
+  and running out of cards** below
 - Double after split (DAS)
 - Resplit aces (RSA), with a configurable max resulting hands (2–4), and an
   optional face-down deal for split-ace cards (only while RSA itself is off)
@@ -92,7 +93,7 @@ double options, side bets) applies immediately.
 **Multi-hand play & splits**
 
 - Bet and play 1–3 simultaneous hands per round (1–2 on a single-deck
-  shoe — see **Single-deck limits** below).
+  shoe — see **Deck-size limits and running out of cards** below).
 - Splits (up to the configured max, including resplit aces) are tracked
   independently per hand, each playing out in turn in table order.
 - A split spot's settlement banner tallies its hands in words — e.g.
@@ -109,45 +110,74 @@ double options, side bets) applies immediately.
   cards — never collapsed into the above-the-cards chip row non-ace splits
   use.
 
-**Single-deck limits**
+**Deck-size limits and running out of cards**
 
-A single deck is small enough that a round — the dealer's hand included —
-can run out of cards part-way through, so a single-deck shoe is held to
-tighter limits than a multi-deck one:
+A round can run out of cards part-way through — the dealer's hand included —
+if a shoe is cut too deep for the hands in play. Two layers keep that from
+happening, and from mattering if it does.
 
-- **At most 2 hands** per round. `hands 3` is refused, and so is funding
-  Hand #3 in the wager grid.
-- **The same number of hands every round of the shoe.** Pick 1 or 2 before
-  the first hand of the shoe is dealt; once it's dealt, the count is locked
-  until the next shuffle, and `hands N` — or funding or clearing a hand's
-  wager in the grid in a way that would change the count — is refused with
-  a message saying so. Until that first deal you can still change it
-  freely, and the shoe's cut card follows.
-- **A shallower cut card**: no deeper than 75% of the shoe with one hand and
-  60% with two, which leaves at least 13 (one hand) or about 21 (two hands)
-  cards behind the cut card for the last round to finish with. Whatever
-  `deckpen` says — including `deckpen rand` — the shoe is cut no deeper than
-  that. The blue rules-summary line and `gamerules` show the depth actually
-  in effect, and the history log records it.
-- **One split per hand**: a spot splits into at most 2 hands. While a
-  single-deck shoe is in play, `splitmax` and `rsa on maxsplit` are held to
-  2 — aces can be split once but never resplit — and `gamerules` shows the
-  value in effect. Your own settings aren't overwritten: they apply again on
-  any multi-deck shoe.
-- Switching to one deck from a game with 3 hands set (`decks 1`, then the
-  next shuffle) cuts the hands back to 2 automatically. Multi-deck shoes are
-  unaffected.
+*Prevention.* A round only starts if the shoe has enough cards left for the
+most a round is likely to use, and the small shoes have tighter rules:
 
-These limits come from simulation. Under the old rules, ordinary
-basic-strategy play on a 1-deck, 3-hand game ran the shoe dry about once per
-15,000 rounds, and random play about once per 900. With the limits, 480,000
-rounds each of basic-strategy and random play ran it dry **zero** times at
-both one and two hands; a stress player who splits every pair and hits every
-hand ran it dry zero times at one hand and once at two hands (before the
-split limit, that player did so roughly once per 750–950 rounds). It isn't a
-guarantee: someone who could see the shuffle and played the single most
-card-hungry line could still run a shoe dry — about 1 shuffle in 25,000 at
-one hand and 1 in 7,000 at two hands, at the deepest legal start.
+- **A single deck** only starts a round with at least **24 cards left**, so
+  no new round starts once more than 28 cards (about 54%) have been dealt —
+  the shoe is reshuffled first — whatever `deckpen` says (a shallower
+  `deckpen` still applies). It's also held to **at most 2 hands** per round —
+  1 or 2, and you can change it any time between rounds (`hands N`, or funding
+  or clearing Hand #2 in the wager grid); `hands 3` and funding Hand #3 are
+  refused — and to **one split per hand**: a spot splits into at most 2
+  hands, so `splitmax` and `rsa on maxsplit` are held to 2 (aces can be split
+  once but never resplit). Your own `splitmax`/`rsa` settings aren't
+  overwritten; they apply again on any multi-deck shoe.
+- **Two decks** are never cut deeper than **80%**, whatever `deckpen` says
+  (the command tells you when it caps your setting), and never with fewer
+  than 15 cards left.
+- **Three or more decks** need **16 cards plus 12 for every hand you're
+  playing** left when a round starts: 28 for 1 hand, 40 for 2, 52 for 3. The
+  shoe is cut early if a deeper `deckpen` would go past that, and changing
+  `hands` between rounds reshuffles right away if the shoe is now too short
+  for the new number of hands, before you size a bet against its count. The
+  floors come from measurement: over 200,000 rounds per row, one round never
+  drew more than 25 cards with 1 hand, 37 with 2, or 44 with 3 — even for a
+  player who splits and hits at every chance — so each floor clears the worst
+  round seen.
+
+The blue rules-summary line and `gamerules` show the depth a shoe is really
+cut at, and the history log records it. Switching to one deck from a game
+with 3 hands set (`decks 1`, then the next shuffle) cuts the hands back to 2
+automatically.
+
+*The failsafe.* If a shoe runs out in the middle of a round anyway, the game
+does what a dealer does: **the discards are shuffled back in and the round
+carries on.** Every card already on the table stays put; everything else —
+including cards from earlier rounds — is shuffled into a fresh order, with the
+table cards counted as already dealt from it. That means the count starts
+over: the running count becomes the Hi-Lo total of the cards on the table, and
+the true count and "Cards Left" follow from the new shuffle. A "\*\* NEW SHOE
+\*\*" flash and a message tell you it happened. Rules queued for the next
+shuffle are not applied mid-round. In the history log the exhausted shoe closes
+with every card dealt, a new shoe row is opened (`cut_reason` `mid_round`),
+and the round's hands are flagged — see **Data storage**.
+
+*How often it matters.* Simulated in 96,000 rounds per configuration, three
+play styles each (basic strategy, random legal moves, and split-and-hit
+everything). Under the previous rules a round could run out of cards in a real
+crash — 2 decks cut at 95% with 3 hands, for instance, about once per 12,000
+rounds under basic strategy, and 3 to 8 decks at deep cuts once per 14,000 to
+48,000. Now there are **no crashes anywhere**, and the failsafe itself almost
+never has a job to do:
+
+- **Single deck:** it never fires, and no line of play at all can even reach it
+  — checked against every legal decision sequence on 40,000 shuffles at the
+  deepest legal start.
+- **Three or more decks:** it never fired in 3, 4, 6 or 8 decks × 1, 2 or 3
+  hands, whatever the play style; the same exhaustive search over every line of
+  play found none that needs it at the floors above (a few very branchy
+  shuffles hit the search's size limit rather than being proven).
+- **Two decks:** it fires only for a player who splits every pair and hits every
+  hand (about 1 round in 200).
+
+When it does fire, the round just finishes.
 
 **Player actions**
 
@@ -522,8 +552,8 @@ any time by launching without `--db`.
 | `bj32` / `bj65` | Blackjack pays 3:2 or 6:5 (next shuffle) |
 | `surr late/early/off` | Surrender mode |
 | `h17` / `s17` | Dealer hits / stands on soft 17 (next shuffle) |
-| `decks N` | Number of decks, 1–12 (next shuffle); a single deck allows 2 hands max |
-| `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle); a single deck is capped at 0.75 (1 hand) / 0.60 (2 hands) |
+| `decks N` | Number of decks, 1–12 (next shuffle); a single deck allows 2 hands max and one split per hand |
+| `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle); a single deck is cut when fewer than 24 cards would be left, two decks max 0.80, 3+ decks when fewer than 16 + 12 per hand would be left |
 | `deckpen rand` | Random penetration, 0.65–0.80, re-rolled on every new shoe (next shuffle) |
 | `splitmax N` | Max hands from splitting non-ace pairs (single deck: 2 — one split per hand) |
 | `tablemin N` / `tablemax N` | Table wager limits |
@@ -538,13 +568,13 @@ any time by launching without `--db`.
 | `bank N` | Set bankroll to N |
 | `bank add N` | Add N to bankroll |
 | `bank reset` | Reset bankroll to its default (RETURN confirms) |
-| `bank default N` | Set the bankroll `bank reset`/`hardreset` resets to |
+| `bank default N` | Set the bankroll `bank reset` resets to |
 
 **Table setup**
 
 | Command | Effect |
 |---|---|
-| `hands 1-3` | Simultaneous hands to play (single deck: 1–2, locked for the shoe once dealt) |
+| `hands 1-3` | Simultaneous hands to play (single deck: 1–2); changeable any time between rounds, and cuts a new shoe first if the current one is too short for that many hands |
 
 **Side bets**
 
@@ -632,6 +662,37 @@ table, so there's no separate command to look them up.
 | `ui.py` | The `curses` TUI: layout, rendering, animation, input handling |
 | `sound.py` | Fire-and-forget sound-effect playback (see `sounds/README.md`) |
 | `__main__.py` | `python3 -m cs-blackjack` entry point (`--db FILE` picks a different history database) |
+| `tests/` | The test suite and analysis tools — see **Testing** |
+
+### Testing
+
+The `tests/` folder holds checks that drive the real game code (not copies of
+it) against known answers. It uses only the standard library, apart from one
+optional package for the on-screen tests, and every script runs with its own
+throwaway home folder, so **it never touches `~/.cs-blackjack` or your saved
+game**.
+
+```bash
+python3 -m unittest discover -s tests -v      # everything (about 3–4 minutes)
+python3 tests/check_failsafe.py               # or any one check on its own
+CSBJ_FULL=1 python3 -m unittest discover -s tests   # also the mutation check and a longer audit
+```
+
+| Script | What it proves |
+|---|---|
+| `check_failsafe.py` | The mid-round reshuffle: every draw path (deal, hit, double, both split draws, the dealer), the cards on the table stay put, the count and card accounting stay exact, and the prevention limits and their messages |
+| `check_split_cap.py` | One split per hand on a single deck, and only there |
+| `check_history_reshuffle.py` | How the log records a round that ran the shoe dry (start shoe, the `reshuffled_mid_round` flag, the exact cards of both shoes), and upgrades of older database versions |
+| `check_stats_and_import.py` | Every lifetime and session figure comes from the database; the one-time import of an older game's stats (including negative figures); `newsession`, `bank reset`, and `--db` |
+| `check_data_safety.py` | `export`, `backup`, `restore` (and rejecting bad backups), crash recovery, corrupt or newer files, atomic saves, and playing on with no database |
+| `check_locked_db.py` | Another program holding the database: nothing is dropped or mis-attributed, and it all lands, in order, once the lock lifts |
+| `check_audit.py` | Thousands of random rounds with the log attached, checked against ground truth: bankroll conservation, the exact cards dealt, every stat against an independent implementation, the running counts |
+| `check_ui.py` | The real screen in a pseudo-terminal: the deck rules and their messages, a mid-hand reshuffle on screen, what's saved on quit / `SIGTERM` / `SIGHUP`. Needs `pip install pyte`; skipped without it |
+| `tools/mutation_check.py` | Injects known bugs and confirms the checks above fail for each — a check that can't fail proves nothing |
+| `tools/consumption.py`, `tools/montecarlo.py`, `tools/adversary.py` | The measurements behind the minimum-cards floors: cards used per round, crash / failsafe rates per configuration over millions of rounds, and a search over every legal line of play (run them directly; `--help`-style usage is in each file's docstring) |
+
+Runs are repeatable: the game's shuffles use a fixed seed unless you set
+`CSBJ_SEED=n`.
 
 ### Data storage
 
@@ -657,8 +718,9 @@ database existed, the game counted lifetime numbers itself and kept them in
 the state file: the first launch that finds them imports them into the
 database's `imported_stats` table (only the part the database doesn't
 already hold), and from then on the state file no longer carries any stats.
-Until that import succeeds they stay in the state file untouched, so they can
-never be lost. (They go into the first database the game opens after the
+Figures come across with their sign (a losing side bet stays a loss). Until
+that import succeeds they stay in the state file untouched, so they can never
+be lost. (They go into the first database the game opens after the
 upgrade — if that's a fresh `--db` file rather than your usual one, that's
 where they land.)
 
@@ -671,6 +733,17 @@ save. The history database is versioned with SQLite's `user_version` and
 upgrades itself on launch. If the database can't be opened at all, the game
 tells you at launch and plays on without logging — history problems never
 stop a hand.
+
+**If another program has the database locked** (a SQLite browser sitting on an
+open edit, say), the game keeps playing and holds what it couldn't write — every
+round, and every shoe change (a shoe closing, the next one being cut, including
+a mid-round reshuffle) — in memory, in order, and the stats screen notes how
+many rounds are waiting. The next successful write, or the game quitting, saves
+them all, each attached to the right shoe and session. Only if the lock is still
+there when the game closes do those waiting rounds go unsaved; whatever was
+already written is untouched, and a `newsession` or `restore` requested while
+the database is busy is declined or carried on in the current session rather
+than half-done.
 
 #### The history database
 
@@ -715,8 +788,8 @@ launches. The row is updated after every round, so it's always current.
 | Columns | Meaning |
 |---|---|
 | `shoe_id`, `session_id` | The shoe's ID, and the session it was cut in |
-| `cut_at`, `retired_at`, `cut_reason` | `cut_reason`: `start`, `penetration` (cut card reached), `newshoe`, `newsession`, `restore` (older databases may also contain `hardreset`) |
-| `num_decks`, `penetration`, `total_cards`, `cards_dealt` | Deck count; the penetration in effect for the shoe (with `deckpen rand`, the value that was rolled; a single-deck shoe records its capped value, 0.75 or 0.60); cards actually dealt from it |
+| `cut_at`, `retired_at`, `cut_reason` | `cut_reason`: `start`, `penetration` (cut card or minimum-cards rule reached), `newshoe`, `newsession`, `mid_round` (the shoe ran out during a round and the discards were reshuffled), `restore` (older databases may also contain `hardreset`) |
+| `num_decks`, `penetration`, `total_cards`, `cards_dealt` | Deck count; the depth the shoe is really cut at (with `deckpen rand`, the value that was rolled; a two-deck shoe is at most 0.80; a single deck is cut by card count, so at most 28/52 ≈ 0.54); cards actually dealt from it |
 | `blackjack_payout`, `hit_soft_17`, `rules_json` | Table rules as of the cut, including every side-bet payout |
 | `card_order` | **The exact order of the whole shuffle, first card dealt first**, with the never-dealt cards marked off after a `\|` — e.g. `K♣T♦3♠\|7♥A♠…` reads *dealt* `\|` *never dealt* (624 characters plus the `\|` for six decks) |
 
@@ -732,6 +805,12 @@ cards were dealt and which never were. Split it in SQL or pandas with
 process being killed outright (`kill -9`, power loss): that shoe keeps its
 dealt cards but has no `|`.
 
+**A shoe that runs out mid-round.** The exhausted shoe is retired on the spot
+with all of its cards dealt and nothing after the `|` (`…|`). The new shoe's row
+(`cut_reason` `mid_round`) starts with the cards that were on the table, in the
+order they were drawn, as its dealt part — they count as dealt from the new
+shuffle — followed by everything drawn after the reshuffle.
+
 **`hands`** — one row per player hand (a spot that splits logs one row per
 resulting hand; `round_id` groups the hands dealt together, and
 `bankroll_before`/`bankroll_after`, the count columns, and the dealer's
@@ -739,7 +818,8 @@ columns repeat on every hand of a round).
 
 | Columns | Meaning |
 |---|---|
-| `hand_id`, `round_id`, `session_id`, `shoe_id`, `played_at` | Keys and time; `hand_id` order is settlement order |
+| `hand_id`, `round_id`, `session_id`, `shoe_id`, `played_at` | Keys and time; `hand_id` order is settlement order. `shoe_id` is the shoe the round **started** on |
+| `reshuffled_mid_round` | `1` on every hand of a round during which the shoe ran out and the discards were reshuffled, else `0`. Such a round straddles two shoes: `shoe_id` and the `running_count_before` / `true_count_before` / `cards_dealt_before` columns describe the shoe it started on, while the cards drawn after the reshuffle came from the next shoe row (`cut_reason` `mid_round`). For strict count-versus-bet analysis, leave these rounds out (`WHERE reshuffled_mid_round = 0`) |
 | `spot_number`, `hand_number` | The on-screen "Hand #" (1–3), and the hand's position within its spot after splits |
 | `initial_bet`, `final_bet` | Wager before and after any double |
 | `hand_type`, `initial_total` | From the first two cards: `blackjack`, `pair` (anything splittable, so two different ten-value cards count), `soft`, or `hard`; and their total |
@@ -774,7 +854,7 @@ the same answer in SQLite and MySQL):
 ```sql
 SELECT true_count_before AS tc, COUNT(*) AS hands,
        ROUND(SUM(main_pl) / SUM(final_bet) * 100, 2) AS ev_pct
-FROM hands WHERE outcome <> 'abandoned'
+FROM hands WHERE outcome <> 'abandoned' AND reshuffled_mid_round = 0
 GROUP BY true_count_before ORDER BY true_count_before;
 ```
 
@@ -831,7 +911,9 @@ if you'd rather have booleans. A few things worth trying:
 ```python
 import numpy as np, re
 
-settled = hands[hands["outcome"] != "abandoned"].copy()
+# (rounds where the shoe ran out mid-hand straddle two shoes, so their count
+# columns don't apply cleanly -- leave them out of count-versus-bet work)
+settled = hands[(hands["outcome"] != "abandoned") & (hands["reshuffled_mid_round"] == 0)].copy()
 
 # Your edge by true count (buckets of one count):
 settled["tc"] = np.floor(settled["true_count_before"]).astype(int)
