@@ -16,7 +16,12 @@ RANDOM_PENETRATION_RANGE = (0.65, 0.80)
 # and a cut card no deeper than this -- by number of hands -- which leaves
 # 13 (one hand) or about 21 (two hands) cards behind the cut card for the
 # last round to finish with.
+#
+# Splitting is held to one split per hand too: a pair split into up to four
+# hands, each hit repeatedly, is what still ran a single deck dry once the
+# limits above were in place (see GameSession.split_hand_limit).
 SINGLE_DECK_MAX_HANDS = 2
+SINGLE_DECK_MAX_SPLIT_HANDS = 2  # hands one spot may split into: the original plus one split
 SINGLE_DECK_MAX_PENETRATION = {1: 0.75, 2: 0.60}
 
 

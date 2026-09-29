@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List
 
 from .history import BACKUP_DIR, EXPORT_DIR, EXPORT_FORMATS, EXPORT_TABLES, HistoryError
-from .rules import RANDOM_PENETRATION_RANGE, SINGLE_DECK_MAX_HANDS, single_deck_penetration_cap
+from .rules import (
+    RANDOM_PENETRATION_RANGE,
+    SINGLE_DECK_MAX_HANDS,
+    SINGLE_DECK_MAX_SPLIT_HANDS,
+    single_deck_penetration_cap,
+)
 from .sidebets import side_bet_allowed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -19,7 +24,7 @@ class CommandError(Exception):
 HELP_LINES = [
     "RULES",
     "  das on/off                    Double after split",
-    "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands, up to 4)",
+    "  rsa on/off [maxsplit N]       Resplit aces (max resulting hands, up to 4; single deck: no resplit)",
     "  rsa facedown on/off            Deal split-ace cards face down (RSA off only)",
     "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5 (next shuffle)",
     "  surr late/early/off            Surrender mode",
@@ -27,7 +32,7 @@ HELP_LINES = [
     "  decks N                        Number of decks, 1-12 (next shuffle); a single deck allows 2 hands max",
     "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
     "  deckpen rand                   Random penetration (0.65-0.80) re-rolled on every new shoe",
-    "  splitmax N                     Max hands from splitting non-ace pairs",
+    "  splitmax N                     Max hands from splitting non-ace pairs (single deck: 2, one split per hand)",
     "  tablemin N  /  tablemax N      Table wager limits",
     "  double facedown on/off         Deal the double-down card face down",
     "  double blackjack on/off        Offer a double instead of an automatic 3:2 payout on a natural",
@@ -198,7 +203,7 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         note = ""
         if n == 1:
             note = (
-                f" (single-deck limits: at most {SINGLE_DECK_MAX_HANDS} hands, the same every round of the shoe; "
+                f" (single-deck limits: at most {SINGLE_DECK_MAX_HANDS} hands, the same every round of the shoe, one split per hand; "
                 f"cut card no deeper than {single_deck_penetration_cap(1):.0%} with 1 hand, "
                 f"{single_deck_penetration_cap(2):.0%} with 2)"
             )
@@ -228,7 +233,10 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         if not (1 <= n <= 8):
             raise CommandError("splitmax must be between 1 and 8")
         rules.split_max_hands = n
-        return f"Max split hands (non-ace pairs): {n}"
+        note = ""
+        if session.shoe.num_decks == 1 and n > SINGLE_DECK_MAX_SPLIT_HANDS:
+            note = f" (a single-deck shoe allows one split per hand, so {SINGLE_DECK_MAX_SPLIT_HANDS} applies while one is in play)"
+        return f"Max split hands (non-ace pairs): {n}{note}"
 
     if head == "tablemax":
         amt = _parse_float(_require(rest, 0, "tablemax N"), "tablemax")
@@ -395,6 +403,8 @@ def _rsa_command(rest: List[str], session: "GameSession") -> str:
         # leaving an unreachable flag set.
         rules.rsa_facedown = False
         note = " (RSA facedown turned off)"
+    if session.shoe.num_decks == 1 and rules.rsa_max_hands > SINGLE_DECK_MAX_SPLIT_HANDS:
+        note += " (a single-deck shoe allows one split per hand, so aces can't be resplit while one is in play)"
     return f"Resplit aces: {'ON' if rules.rsa else 'OFF'} (max {rules.rsa_max_hands} hands){note}"
 
 

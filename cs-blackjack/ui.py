@@ -21,7 +21,7 @@ from .engine import (
 )
 from .hand import Hand
 from .history import HistoryDB
-from .rules import SINGLE_DECK_MAX_HANDS, format_blackjack_payout, single_deck_penetration_cap
+from .rules import SINGLE_DECK_MAX_HANDS, SINGLE_DECK_MAX_SPLIT_HANDS, format_blackjack_payout, single_deck_penetration_cap
 from .sidebets import (
     BUSTER_CATEGORIES,
     POWER_POKER_CATEGORIES,
@@ -1486,10 +1486,10 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         f"  Blackjack pays:      {format_blackjack_payout(active.blackjack_payout)}",
         f"  Dealer Soft 17:      {'Hits' if active.hit_soft_17 else 'Stands'}",
         f"  Double After Split:  {'ON' if r.das else 'OFF'}",
-        f"  Resplit Aces:        {('ON (max ' + str(r.rsa_max_hands) + ' hands)') if r.rsa else 'OFF'}",
+        f"  Resplit Aces:        {('ON (max ' + str(session.rsa_hand_limit()) + ' hands)') if r.rsa else 'OFF'}",
         f"  RSA Facedown:        {'ON' if r.rsa_facedown else 'OFF'}",
         f"  Surrender:           {r.surrender.title()}",
-        f"  Split Max Hands:     {r.split_max_hands}",
+        f"  Split Max Hands:     {session.split_hand_limit()}",
         f"  Table Limits:        {table_range}",
         f"  Double Facedown:     {'ON' if r.double_facedown else 'OFF'}",
         f"  Double Blackjack:    {'ON' if r.double_blackjack else 'OFF'}",
@@ -1529,6 +1529,7 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
             "SINGLE-DECK LIMITS",
             f"  Hands per Round:     {r.num_hands}  ({locked})",
             f"  Max Hands:           {SINGLE_DECK_MAX_HANDS}",
+            f"  Splits:              one per hand (a spot splits into at most {SINGLE_DECK_MAX_SPLIT_HANDS} hands)",
             f"  Cut Card Depth:      {single_deck_penetration_cap(1):.0%} with 1 hand, "
             f"{single_deck_penetration_cap(2):.0%} with 2",
         ]

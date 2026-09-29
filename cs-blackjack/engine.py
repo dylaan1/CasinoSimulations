@@ -10,7 +10,13 @@ from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .history import HistoryError
-from .rules import RANDOM_PENETRATION_RANGE, SINGLE_DECK_MAX_HANDS, Rules, single_deck_penetration_cap
+from .rules import (
+    RANDOM_PENETRATION_RANGE,
+    SINGLE_DECK_MAX_HANDS,
+    SINGLE_DECK_MAX_SPLIT_HANDS,
+    Rules,
+    single_deck_penetration_cap,
+)
 from .sidebets import (
     buster_table_key,
     evaluate_dealer_buster,
@@ -259,6 +265,20 @@ class GameSession:
             self.rules.num_hands = min(self.rules.num_hands, SINGLE_DECK_MAX_HANDS)
         self.shoe_hands = None
         return Shoe(self.rules.num_decks, self._effective_penetration(self.rules.num_decks))
+
+    def split_hand_limit(self) -> int:
+        """Most hands one spot can split into right now: the 'splitmax' rule,
+        held to one split per hand (2 hands) while a single-deck shoe is in
+        play. The rule itself is left alone, so it applies again on any
+        multi-deck shoe."""
+        limit = self.rules.split_max_hands
+        return min(limit, SINGLE_DECK_MAX_SPLIT_HANDS) if self.shoe.num_decks == 1 else limit
+
+    def rsa_hand_limit(self) -> int:
+        """Same, for resplitting aces (the 'rsa ... maxsplit' rule): on a
+        single deck that means aces can be split once but never resplit."""
+        limit = self.rules.rsa_max_hands
+        return min(limit, SINGLE_DECK_MAX_SPLIT_HANDS) if self.shoe.num_decks == 1 else limit
 
     def lock_shoe_hands(self) -> None:
         """Pin this single-deck shoe to the hand count its first round was
@@ -666,7 +686,7 @@ class Round:
             return (
                 self.rules.rsa
                 and hand.cards[-1].rank == "A"
-                and len(spot.hands) < self.rules.rsa_max_hands
+                and len(spot.hands) < self.session.rsa_hand_limit()
             )
         return True
 
@@ -697,7 +717,7 @@ class Round:
     def _can_split(self, spot: Spot, hand: Hand) -> bool:
         if not hand.can_split:
             return False
-        if len(spot.hands) >= self.rules.split_max_hands:
+        if len(spot.hands) >= self.session.split_hand_limit():
             return False
         return self.session.can_afford(hand.bet)
 
@@ -732,8 +752,11 @@ class Round:
         if action == "split":
             if not hand.can_split:
                 return "Those two cards can't be split."
-            if len(spot.hands) >= self.rules.split_max_hands:
-                return f"Max split hands reached (splitmax {self.rules.split_max_hands})."
+            limit = self.session.split_hand_limit()
+            if len(spot.hands) >= limit:
+                if limit < self.rules.split_max_hands:
+                    return "Single-deck games allow one split per hand."
+                return f"Max split hands reached (splitmax {limit})."
             if not self.session.can_afford(hand.bet):
                 return "Not enough bankroll to split."
             return "Splitting isn't allowed on this hand."

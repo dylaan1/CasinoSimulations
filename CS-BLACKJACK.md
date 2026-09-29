@@ -83,7 +83,7 @@ or the automatic one when the shoe runs low) actually applies it; until
 then, the blue and red summary lines keep showing what's really in effect,
 not what's queued up. Every other rule (DAS, RSA, surrender, table limits,
 double options, side bets) applies immediately.
-- Max hands from splitting non-ace pairs (1–8)
+- Max hands from splitting non-ace pairs (1–8; 2 on a single-deck shoe)
 - Table min/max wagers
 - Optional face-down double-down card (revealed only at the dealer's
   reveal/settlement step)
@@ -129,17 +129,25 @@ tighter limits than a multi-deck one:
   `deckpen` says — including `deckpen rand` — the shoe is cut no deeper than
   that. The blue rules-summary line and `gamerules` show the depth actually
   in effect, and the history log records it.
+- **One split per hand**: a spot splits into at most 2 hands. While a
+  single-deck shoe is in play, `splitmax` and `rsa on maxsplit` are held to
+  2 — aces can be split once but never resplit — and `gamerules` shows the
+  value in effect. Your own settings aren't overwritten: they apply again on
+  any multi-deck shoe.
 - Switching to one deck from a game with 3 hands set (`decks 1`, then the
   next shuffle) cuts the hands back to 2 automatically. Multi-deck shoes are
   unaffected.
 
 These limits come from simulation. Under the old rules, ordinary
-basic-strategy play on a 1-deck, 3-hand game ran the shoe dry about once
-per 15,000 rounds, and random play far more often; with these limits there
-were none in 200,000 rounds of basic-strategy play and 200,000 rounds of
-random play. One thing they don't rule out: a player who deliberately
-splits every pair into four hands and hits every hand can still, rarely,
-run a single-deck shoe dry.
+basic-strategy play on a 1-deck, 3-hand game ran the shoe dry about once per
+15,000 rounds, and random play about once per 900. With the limits, 480,000
+rounds each of basic-strategy and random play ran it dry **zero** times at
+both one and two hands; a stress player who splits every pair and hits every
+hand ran it dry zero times at one hand and once at two hands (before the
+split limit, that player did so roughly once per 750–950 rounds). It isn't a
+guarantee: someone who could see the shuffle and played the single most
+card-hungry line could still run a shoe dry — about 1 shuffle in 25,000 at
+one hand and 1 in 7,000 at two hands, at the deepest legal start.
 
 **Player actions**
 
@@ -500,7 +508,7 @@ and shoe is also logged to a SQLite database at
 | Command | Effect |
 |---|---|
 | `das on/off` | Double after split |
-| `rsa on/off [maxsplit N]` | Resplit aces (max resulting hands, up to 4) |
+| `rsa on/off [maxsplit N]` | Resplit aces (max resulting hands, up to 4; single deck: aces can't be resplit) |
 | `rsa facedown on/off` | Deal split-ace cards face down (RSA off only) |
 | `bj32` / `bj65` | Blackjack pays 3:2 or 6:5 (next shuffle) |
 | `surr late/early/off` | Surrender mode |
@@ -508,7 +516,7 @@ and shoe is also logged to a SQLite database at
 | `decks N` | Number of decks, 1–12 (next shuffle); a single deck allows 2 hands max |
 | `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle); a single deck is capped at 0.75 (1 hand) / 0.60 (2 hands) |
 | `deckpen rand` | Random penetration, 0.65–0.80, re-rolled on every new shoe (next shuffle) |
-| `splitmax N` | Max hands from splitting non-ace pairs |
+| `splitmax N` | Max hands from splitting non-ace pairs (single deck: 2 — one split per hand) |
 | `tablemin N` / `tablemax N` | Table wager limits |
 | `double facedown on/off` | Deal the double-down card face down |
 | `double blackjack on/off` | Offer a double instead of an automatic 3:2 payout on a natural |
