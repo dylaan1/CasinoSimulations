@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import curses
+import signal
 import sys
 import time
 from pathlib import Path
@@ -205,7 +206,7 @@ WAGER_MAX_LEN = 8
 SIDEBET_MAX_LEN = 5
 
 # Every "New shoe shuffled in..." variant the CLI info line can show (see
-# the newshoe/newsession/hardreset confirmations and the post-settlement
+# the newshoe/newsession confirmations and the post-settlement
 # auto-reshuffle in _main) -- after 2s showing any of these, the line reverts
 # to the default "[RETURN] to Deal" hint (see render()'s betting-screen hint).
 NEW_SHOE_MESSAGE_PREFIXES = (
@@ -1597,11 +1598,10 @@ def render_stats_screen(stdscr, session: GameSession, round_: Optional[Round]) -
 
 
 def _history_stats_lines(session: GameSession) -> List[str]:
-    """The stats screen's bottom block, read from the history database
-    rather than the in-memory counters: bankroll range, drawdown, streaks
-    and best/worst hand (this session | all time), next to results by
-    hand type. All time means everything in the database -- 'hardreset'
-    zeroes the lifetime counters above but never the history log."""
+    """The stats screen's bottom block, read from the history database:
+    bankroll range, drawdown, streaks and best/worst hand (this session |
+    all time), next to results by hand type. (The panels above it come from
+    the same database; this block just goes further than they do.)"""
     history = session.history
     overview = history.overview() if history is not None else None
     lines: List[str] = ["", ""]
@@ -1615,6 +1615,8 @@ def _history_stats_lines(session: GameSession) -> List[str]:
         f"HISTORY DATABASE  {overview['path'].replace(str(Path.home()), '~')}  --  "
         f"{counts['hands']:,} hands, {counts['sessions']:,} sessions, {counts['shoes']:,} shoes"
     )
+    if history.pending_rounds:
+        lines.append(f"  ({history.pending_rounds} round(s) waiting to be written -- the database is locked by another program)")
     if history.error:
         lines.append(f"  (last write problem: {history.error})")
 
@@ -1852,7 +1854,7 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
     if round_ is not None and round_.phase == Phase.SETTLED:
         if session.history is not None:
             session.history.record_round(session, round_)
-        persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
+        persist.save_state(session.bankroll, session.rules, session.wagers, session.side_bet_wagers)
         # A single-hand round's own blackjack already got its highlight
         # sound (sidebet-normal-win.wav) the moment its BLACKJACK banner
         # showed -- see announce_new_settlement_sounds. Playing wager-win.wav
@@ -1872,21 +1874,16 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         # banner rows already show every hand's outcome, and _main's own
         # idle-timeout redraws keep the side-bet label(s) cycling from
         # here on (see _sidebet_banner_lines) without any forced pause.
+        # The one exception: rounds the history log couldn't write yet.
+        waiting = session.history.pending_rounds if session.history is not None else 0
+        if waiting:
+            return f"History database is busy (locked by another program) -- {waiting} round(s) waiting to be saved."
         return ""
     return None
 
 
 def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], stdscr) -> str:
     stripped = raw.strip().lower()
-    if session.pending_hard_reset:
-        session.pending_hard_reset = False
-        if stripped != "confirm":
-            return "Hard reset cancelled."
-        if round_ is not None:
-            return "Finish the current round before hard-resetting."
-        session.reset_hard()
-        _blink_new_shoe(stdscr, session, None)
-        return "Lifetime stats reset. New shoe shuffled in; session stats and bankroll reset."
     if session.pending_restore:
         name, session.pending_restore = session.pending_restore, None
         if stripped != "confirm":
@@ -1924,7 +1921,7 @@ def _hit_test_cell(cell_rects: CellRects, my: int, mx: int) -> Optional[Union[st
     return None
 
 
-def _main(stdscr) -> None:
+def _main(stdscr, db_path: Optional[Path] = None) -> None:
     curses.curs_set(0)
     stdscr.keypad(True)
     # Non-blocking-with-timeout getch() so the loop wakes up on its own to
@@ -1940,9 +1937,12 @@ def _main(stdscr) -> None:
     except curses.error:
         pass
 
-    bankroll, rules, stats, wagers, side_bet_wagers = persist.load_state()
-    history = HistoryDB.open()
-    session = GameSession(bankroll, rules, stats, wagers, side_bet_wagers, history=history)
+    bankroll, rules, wagers, side_bet_wagers = persist.load_state()
+    history = HistoryDB.open(db_path)
+    # Lifetime stats an older version kept in the state file move into the
+    # database (once); until they have, they stay in the state file untouched.
+    history.import_pending_legacy_stats()
+    session = GameSession(bankroll, rules, wagers, side_bet_wagers, history=history)
     session.ensure_shoe_ready()  # validate the session's very first shoe (silently -- nothing to blink about yet)
 
     round_: Optional[Round] = None
@@ -2392,11 +2392,27 @@ def _main(stdscr) -> None:
         # record_round is a no-op for a round it already logged.
         if round_ is not None:
             history.record_round(session, round_)
-        persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
+        persist.save_state(session.bankroll, session.rules, session.wagers, session.side_bet_wagers)
         history.close(session)
 
 
-def run() -> None:
+def _exit_on_signal(signum, _frame) -> None:
+    raise SystemExit(128 + signum)
+
+
+def run(db_path: Optional[Path] = None) -> None:
+    """Launch the game. db_path picks a different history database file
+    (created if it doesn't exist) -- the way to start fresh without deleting
+    anything."""
+    # Closing the terminal window (SIGHUP) or a plain `kill` (SIGTERM) would
+    # otherwise end the process on the spot; turn them into an ordinary exit
+    # so _main's cleanup runs -- it saves the game and writes the shoe's
+    # never-dealt cards to the history log. (SIGKILL and power loss can't be
+    # caught by anything.)
+    for name in ("SIGHUP", "SIGTERM"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            signal.signal(sig, _exit_on_signal)
     try:
         # Best-effort request to maximize/fullscreen the terminal (xterm and
         # many compatible emulators honor this control sequence; unsupported
@@ -2406,4 +2422,4 @@ def run() -> None:
         sys.stdout.flush()
     except Exception:
         pass
-    curses.wrapper(_main)
+    curses.wrapper(_main, db_path)

@@ -80,8 +80,10 @@ class Shoe:
     penetration: float = 0.75
     _cards: List[Card] = field(default_factory=list, init=False)
     # The whole shuffle in the order it will be dealt (first card dealt
-    # first), frozen when the shoe is shuffled -- _cards above shrinks as
-    # cards are drawn, so this is the only place the full order survives.
+    # first), frozen when the shoe is shuffled and kept only in memory --
+    # _cards above shrinks as cards are drawn, so this is the only place the
+    # full order survives. The history log gets the dealt part after each
+    # round and the never-dealt remainder only once the shoe is retired.
     _initial_order: List[Card] = field(default_factory=list, init=False, repr=False)
     drawn_counts: Dict[str, int] = field(
         default_factory=lambda: {rank: 0 for rank in RANKS}, init=False
@@ -104,9 +106,15 @@ class Shoe:
         self.running_count = 0
         self.cards_dealt = 0
 
-    def order_string(self) -> str:
-        """The full shuffle as card tokens in dealing order, e.g. "K♣T♦3♠..."."""
-        return cards_to_string(self._initial_order)
+    def dealt_string(self) -> str:
+        """The cards dealt from this shoe so far, as tokens in dealing order,
+        e.g. "K♣T♦3♠"."""
+        return cards_to_string(self._initial_order[: self.cards_dealt])
+
+    def undealt_string(self) -> str:
+        """The cards still in the shoe, in the order they would have been
+        dealt -- the part of the shuffle no round has drawn."""
+        return cards_to_string(self._initial_order[self.cards_dealt :])
 
     def draw(self) -> Card:
         if not self._cards:
