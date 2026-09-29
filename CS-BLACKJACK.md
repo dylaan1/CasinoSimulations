@@ -229,44 +229,30 @@ match, no restart needed.
 - **Star 21** — the same three cards summed like a 21 total. Requires **2+
   decks**; the paytable itself depends on exactly how many:
 
-  *Standard table (3+ decks):*
-
-  | Hand | Pays |
-  |---|---|
-  | Suited 7-7-7♦ | 5000:1 |
-  | Suited 7-7-7 | 500:1 |
-  | Suited 6-7-8 | 100:1 |
-  | Unsuited 7-7-7 | 50:1 |
-  | Suited 21 | 30:1 |
-  | Unsuited 6-7-8 | 20:1 |
-  | Unsuited 21 | 8:1 |
-  | Any 20 | 4:1 |
-  | Any 19 | 3:1 |
-
-  *Double-deck table (exactly 2 decks — no 7-7-7 categories; a 7-7-7 hand
-  just pays as a plain 21):*
-
-  | Hand | Pays |
-  |---|---|
-  | Suited 6-7-8 | 500:1 |
-  | Suited 21 | 50:1 |
-  | Unsuited 6-7-8 | 40:1 |
-  | Unsuited 21 | 10:1 |
-  | Any 20 | 4:1 |
-  | Any 19 | 3:1 |
+  | Hand | Payout (Standard) | Payout (Double Deck) |
+  |---|---|---|
+  | Suited 7-7-7♦ | 5000:1 | –– |
+  | Suited 7-7-7 | 500:1 | –– |
+  | Suited 6-7-8 | 100:1 | 500:1 |
+  | Unsuited 7-7-7 | 50:1 | –– |
+  | Suited 21 | 30:1 | 50:1 |
+  | Unsuited 6-7-8 | 20:1 | 40:1 |
+  | Unsuited 21 | 8:1 | 10:1 |
+  | Any 20 | 4:1 | 4:1 |
+  | Any 19 | 3:1 | 3:1 |
 
 - **Dealer Buster** — pays out when the dealer busts, scaled by how many
   cards it took. No deck-count restriction, but an 8+ card bust pays out
   higher on a single-deck shoe:
 
-  | Cards to bust | Pays (2+ decks) | Pays (exactly 1 deck) |
+  | # of Cards | Payout (2+ decks) | Payout (Single Deck) |
   |---|---|---|
-  | 3 | 2:1 | 2:1 |
-  | 4 | 3:1 | 3:1 |
-  | 5 | 12:1 | 12:1 |
-  | 6 | 50:1 | 50:1 |
-  | 7 | 100:1 | 100:1 |
   | 8+ | 250:1 | **500:1** |
+  | 7 | 100:1 | 100:1 |
+  | 6 | 50:1 | 50:1 |
+  | 5 | 12:1 | 12:1 |
+  | 4 | 3:1 | 3:1 |
+  | 3 | 2:1 | 2:1 |
 
   Whenever a shoe is cut (session start, `newshoe`, or the automatic
   post-round reshuffle) that no longer supports an enabled Power Poker or
