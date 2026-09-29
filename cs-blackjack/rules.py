@@ -9,6 +9,25 @@ from .sidebets import default_payouts
 # time a fresh shoe is actually cut -- see GameSession._roll_penetration.
 RANDOM_PENETRATION_RANGE = (0.65, 0.80)
 
+# A single-deck shoe is small enough for a round to run out of cards
+# part-way through (the dealer's hand included), so it's held to tighter
+# limits than a multi-deck one: at most SINGLE_DECK_MAX_HANDS hands, the
+# same number every round of that shoe (see GameSession.try_set_num_hands),
+# and a cut card no deeper than this -- by number of hands -- which leaves
+# 13 (one hand) or about 21 (two hands) cards behind the cut card for the
+# last round to finish with.
+#
+# Splitting is held to one split per hand too: a pair split into up to four
+# hands, each hit repeatedly, is what still ran a single deck dry once the
+# limits above were in place (see GameSession.split_hand_limit).
+SINGLE_DECK_MAX_HANDS = 2
+SINGLE_DECK_MAX_SPLIT_HANDS = 2  # hands one spot may split into: the original plus one split
+SINGLE_DECK_MAX_PENETRATION = {1: 0.75, 2: 0.60}
+
+
+def single_deck_penetration_cap(hands: int) -> float:
+    return SINGLE_DECK_MAX_PENETRATION[min(max(hands, 1), SINGLE_DECK_MAX_HANDS)]
+
 
 def format_blackjack_payout(payout: float) -> str:
     return "3:2" if abs(payout - 1.5) < 1e-9 else "6:5"
@@ -45,7 +64,7 @@ class Rules:
     table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
     table_max: float = 5000.0  # max main wager on a single hand
     default_bet: float = 10.0
-    default_bankroll: float = 10_000.0  # bankroll a 'newsession' (or hardreset) resets to
+    default_bankroll: float = 10_000.0  # bankroll 'bank reset' (or hardreset) resets to
     num_hands: int = 1  # simultaneous hands to play, 1-3
 
     power_poker: SideBetRules = field(default_factory=SideBetRules)

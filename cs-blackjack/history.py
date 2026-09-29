@@ -481,7 +481,8 @@ class HistoryDB:
             return
         with self.conn:
             self._update(
-                "shoes", "shoe_id", self.shoe_id, {"cards_dealt": session.shoe.cards_dealt, "retired_at": _now()}
+                "shoes", "shoe_id", self.shoe_id,
+                {"cards_dealt": session.shoe.cards_dealt, "penetration": session.shoe.penetration, "retired_at": _now()},
             )
 
     @_guarded()
@@ -604,7 +605,10 @@ class HistoryDB:
                 self._insert("hands", {**row, "round_id": round_id})
             self._update("sessions", "session_id", self.session_id, self._session_fields(session, track))
             if self.shoe_id is not None:
-                self._update("shoes", "shoe_id", self.shoe_id, {"cards_dealt": session.shoe.cards_dealt})
+                self._update(
+                    "shoes", "shoe_id", self.shoe_id,
+                    {"cards_dealt": session.shoe.cards_dealt, "penetration": session.shoe.penetration},
+                )
         self._track = track
         self._last_round = round_
 

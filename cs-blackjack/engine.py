@@ -10,7 +10,13 @@ from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .history import HistoryError
-from .rules import RANDOM_PENETRATION_RANGE, Rules
+from .rules import (
+    RANDOM_PENETRATION_RANGE,
+    SINGLE_DECK_MAX_HANDS,
+    SINGLE_DECK_MAX_SPLIT_HANDS,
+    Rules,
+    single_deck_penetration_cap,
+)
 from .sidebets import (
     buster_table_key,
     evaluate_dealer_buster,
@@ -168,7 +174,8 @@ class GameSession:
         self.rules = rules
         self.bankroll = bankroll
         self.stats = stats
-        self.shoe = Shoe(rules.num_decks, rules.penetration)
+        self.shoe_hands: Optional[int] = None  # hands locked in for this single-deck shoe, once its first round is dealt
+        self.shoe = self._new_shoe()
         self._enforce_sidebet_deck_gate()
         self.active_rules = ActiveTableRules(rules.blackjack_payout, rules.hit_soft_17)
         self.wagers: List[float] = list(wagers) if wagers else [rules.default_bet, 0.0, 0.0]
@@ -209,7 +216,7 @@ class GameSession:
         current shoe was cut, and so differs from what's actually active."""
         return (
             self.rules.num_decks != self.shoe.num_decks
-            or abs(self.rules.penetration - self.shoe.penetration) > 1e-9
+            or abs(self._effective_penetration(self.shoe.num_decks) - self.shoe.penetration) > 1e-9
             or abs(self.rules.blackjack_payout - self.active_rules.blackjack_payout) > 1e-9
             or self.rules.hit_soft_17 != self.active_rules.hit_soft_17
         )
@@ -241,6 +248,66 @@ class GameSession:
             lo, hi = RANDOM_PENETRATION_RANGE
             self.rules.penetration = round(random.uniform(lo, hi), 2)
 
+    def _effective_penetration(self, num_decks: int) -> float:
+        """The cut-card depth a `num_decks` shoe is actually cut with under
+        the current rules: rules.penetration, held to the single-deck cap
+        for however many hands are being played."""
+        if num_decks == 1:
+            return min(self.rules.penetration, single_deck_penetration_cap(self.rules.num_hands))
+        return self.rules.penetration
+
+    def _new_shoe(self) -> Shoe:
+        """A freshly shuffled shoe for the current rules, with the single-deck
+        limits applied: hands above the single-deck maximum are cut back to
+        it (whatever set them -- an older save, or a 3-hand game about to
+        switch to one deck), and the hand count starts out unlocked."""
+        if self.rules.num_decks == 1:
+            self.rules.num_hands = min(self.rules.num_hands, SINGLE_DECK_MAX_HANDS)
+        self.shoe_hands = None
+        return Shoe(self.rules.num_decks, self._effective_penetration(self.rules.num_decks))
+
+    def split_hand_limit(self) -> int:
+        """Most hands one spot can split into right now: the 'splitmax' rule,
+        held to one split per hand (2 hands) while a single-deck shoe is in
+        play. The rule itself is left alone, so it applies again on any
+        multi-deck shoe."""
+        limit = self.rules.split_max_hands
+        return min(limit, SINGLE_DECK_MAX_SPLIT_HANDS) if self.shoe.num_decks == 1 else limit
+
+    def rsa_hand_limit(self) -> int:
+        """Same, for resplitting aces (the 'rsa ... maxsplit' rule): on a
+        single deck that means aces can be split once but never resplit."""
+        limit = self.rules.rsa_max_hands
+        return min(limit, SINGLE_DECK_MAX_SPLIT_HANDS) if self.shoe.num_decks == 1 else limit
+
+    def lock_shoe_hands(self) -> None:
+        """Pin this single-deck shoe to the hand count its first round was
+        dealt with, for the rest of the shoe. No-op for multi-deck shoes."""
+        if self.shoe.num_decks == 1 and self.shoe_hands is None:
+            self.shoe_hands = self.rules.num_hands
+
+    def try_set_num_hands(self, n: int) -> Optional[str]:
+        """Set how many hands are played per round. Returns an error string,
+        or None on success. On a single-deck shoe: at most SINGLE_DECK_MAX_
+        HANDS, and once a round has been dealt from the shoe the count stays
+        put until the next shuffle -- but until that first deal it can still
+        be changed, and the shoe's cut card follows (1 hand allows a deeper
+        cut than 2)."""
+        if n == self.rules.num_hands:
+            return None
+        if self.shoe.num_decks == 1:
+            if n > SINGLE_DECK_MAX_HANDS:
+                return f"Single-deck games are limited to {SINGLE_DECK_MAX_HANDS} hands."
+            if self.shoe_hands is not None:
+                return (
+                    f"This single-deck shoe is locked at {self.shoe_hands} hand(s) "
+                    "until the next shuffle."
+                )
+        self.rules.num_hands = n
+        if self.shoe.num_decks == 1:  # not dealt from yet (else locked above): re-cut the cut card
+            self.shoe.penetration = self._effective_penetration(1)
+        return None
+
     def _cut_shoe(self, reason: str, count_cut: bool = True) -> None:
         """Retire the current shoe and cut a brand-new one -- the single
         path every reshuffle after the first goes through, so the history
@@ -250,7 +317,7 @@ class GameSession:
         self._roll_penetration()
         if self.history is not None:
             self.history.shoe_retired(self)
-        self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
+        self.shoe = self._new_shoe()
         self._enforce_sidebet_deck_gate()
         self._commit_active_rules()
         if count_cut:
@@ -361,10 +428,19 @@ class GameSession:
 
 
 def try_start_round(session: GameSession) -> Tuple[Optional["Round"], Optional[str]]:
+    if session.shoe.num_decks == 1:
+        # Belt and braces: try_set_num_hands and the shoe cut already keep
+        # these true, but a round must never be dealt in violation of them.
+        if session.rules.num_hands > SINGLE_DECK_MAX_HANDS:
+            return None, f"Single-deck games are limited to {SINGLE_DECK_MAX_HANDS} hands."
+        if session.shoe_hands is not None and session.rules.num_hands != session.shoe_hands:
+            return None, f"This single-deck shoe is locked at {session.shoe_hands} hand(s) until the next shuffle."
     try:
-        return Round(session), None
+        round_ = Round(session)
     except (InsufficientFundsError, NoWagerError, BelowMinimumWagerError) as exc:
         return None, str(exc)
+    session.lock_shoe_hands()
+    return round_, None
 
 
 class Round:
@@ -610,7 +686,7 @@ class Round:
             return (
                 self.rules.rsa
                 and hand.cards[-1].rank == "A"
-                and len(spot.hands) < self.rules.rsa_max_hands
+                and len(spot.hands) < self.session.rsa_hand_limit()
             )
         return True
 
@@ -641,7 +717,7 @@ class Round:
     def _can_split(self, spot: Spot, hand: Hand) -> bool:
         if not hand.can_split:
             return False
-        if len(spot.hands) >= self.rules.split_max_hands:
+        if len(spot.hands) >= self.session.split_hand_limit():
             return False
         return self.session.can_afford(hand.bet)
 
@@ -676,8 +752,11 @@ class Round:
         if action == "split":
             if not hand.can_split:
                 return "Those two cards can't be split."
-            if len(spot.hands) >= self.rules.split_max_hands:
-                return f"Max split hands reached (splitmax {self.rules.split_max_hands})."
+            limit = self.session.split_hand_limit()
+            if len(spot.hands) >= limit:
+                if limit < self.rules.split_max_hands:
+                    return "Single-deck games allow one split per hand."
+                return f"Max split hands reached (splitmax {limit})."
             if not self.session.can_afford(hand.bet):
                 return "Not enough bankroll to split."
             return "Splitting isn't allowed on this hand."
