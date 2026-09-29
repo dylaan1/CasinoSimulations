@@ -3,6 +3,7 @@ from __future__ import annotations
 import curses
 import sys
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 from . import commands, persist, sound
@@ -19,6 +20,7 @@ from .engine import (
     try_start_round,
 )
 from .hand import Hand
+from .history import HistoryDB
 from .rules import format_blackjack_payout
 from .sidebets import (
     BUSTER_CATEGORIES,
@@ -1446,20 +1448,25 @@ def render_too_small(stdscr) -> None:
 
 
 def _render_overlay_lines(stdscr, title: str, lines: List[str]) -> None:
-    stdscr.erase()
+    """Full-screen text overlay, one key press to dismiss. Content taller
+    than the terminal is split into pages -- any key shows the next, and
+    only the last page's key returns to the game."""
     max_y, max_x = stdscr.getmaxyx()
-    _safe_addstr(stdscr, 0, 2, title, curses.A_BOLD)
-    for i, line in enumerate(lines):
-        y = 2 + i
-        if y >= max_y - 2:
-            break
-        is_header = bool(line) and not line.startswith(" ")
-        _safe_addstr(stdscr, y, 2, line, curses.A_BOLD if is_header else curses.A_NORMAL)
-    _safe_addstr(stdscr, max_y - 1, 2, "Press any key to return...", curses.A_DIM)
-    stdscr.refresh()
-    ch = stdscr.getch()
-    while ch == -1:  # stdscr is in timeout() mode for the main loop's idle
-        ch = stdscr.getch()  # redraws; a real "any key" wait needs to skip those
+    per_page = max(1, max_y - 4)  # rows 2 .. max_y - 3; row max_y - 1 is the footer
+    pages = [lines[i : i + per_page] for i in range(0, len(lines), per_page)] or [[]]
+    for page_no, page in enumerate(pages, start=1):
+        stdscr.erase()
+        page_title = title if len(pages) == 1 else f"{title}  (page {page_no}/{len(pages)})"
+        _safe_addstr(stdscr, 0, 2, page_title, curses.A_BOLD)
+        for i, line in enumerate(page):
+            is_header = bool(line) and not line.startswith(" ")
+            _safe_addstr(stdscr, 2 + i, 2, line, curses.A_BOLD if is_header else curses.A_NORMAL)
+        footer = "Press any key to return..." if page_no == len(pages) else "Press any key for the next page..."
+        _safe_addstr(stdscr, max_y - 1, 2, footer, curses.A_DIM)
+        stdscr.refresh()
+        ch = stdscr.getch()
+        while ch == -1:  # stdscr is in timeout() mode for the main loop's idle
+            ch = stdscr.getch()  # redraws; a real "any key" wait needs to skip those
 
 
 def render_help_screen(stdscr) -> None:
@@ -1571,7 +1578,74 @@ def render_stats_screen(stdscr, session: GameSession, round_: Optional[Round]) -
             cells.append(sb_cell(rows[i]) if i < len(rows) else " " * sb_table_w)
         lines.append("  " + table_gap.join(cells))
 
+    lines.extend(_history_stats_lines(session))
     _render_overlay_lines(stdscr, "cs-blackjack -- Stats", lines)
+
+
+def _history_stats_lines(session: GameSession) -> List[str]:
+    """The stats screen's bottom block, read from the history database
+    rather than the in-memory counters: bankroll range, drawdown, streaks
+    and best/worst hand (this session | all time), next to results by
+    hand type. All time means everything in the database -- 'hardreset'
+    zeroes the lifetime counters above but never the history log."""
+    history = session.history
+    overview = history.overview() if history is not None else None
+    lines: List[str] = ["", ""]
+    if overview is None:
+        why = f": {history.error}" if history is not None and history.error else ""
+        lines.append(f"HISTORY DATABASE unavailable{why}")
+        return lines
+
+    counts = overview["counts"]
+    lines.append(
+        f"HISTORY DATABASE  {overview['path'].replace(str(Path.home()), '~')}  --  "
+        f"{counts['hands']:,} hands, {counts['sessions']:,} sessions, {counts['shoes']:,} shoes"
+    )
+    if history.error:
+        lines.append(f"  (last write problem: {history.error})")
+
+    sess, alltime = overview["session"] or {}, overview["all_time"]
+
+    def streak(kind: str, n: int) -> str:
+        return f"{kind}{n}" if n else "-"
+
+    metric_rows = [
+        ("Peak Bankroll", money(sess["peak_bankroll"]) if sess else "-", money(alltime["peak_bankroll"] or 0)),
+        ("Lowest Bankroll", money(sess["lowest_bankroll"]) if sess else "-", money(alltime["lowest_bankroll"] or 0)),
+        ("Max Drawdown", money(sess["max_drawdown"]) if sess else "-", money(alltime["max_drawdown"])),
+        ("Longest Win Streak", streak("W", sess["longest_win_streak"]) if sess else "-", streak("W", alltime["longest_win_streak"])),
+        ("Longest Loss Streak", streak("L", sess["longest_loss_streak"]) if sess else "-", streak("L", alltime["longest_loss_streak"])),
+        ("Biggest Hand Win", money(sess["biggest_win"]) if sess else "-", money(alltime["biggest_win"])),
+        ("Biggest Hand Loss", money(sess["biggest_loss"]) if sess else "-", money(alltime["biggest_loss"])),
+    ]
+    label_w, num_w = 22, 14
+    type_w, small_w, pl_w = 14, 8, 14
+    left_header = f"{'':<{label_w}}{'This Session':>{num_w}}{'All Time':>{num_w}}"
+    right_header = f"{'Hand Type':<{type_w}}{'Hands':>{small_w}}{'Won':>{small_w}}{'Lost':>{small_w}}{'Push':>{small_w}}{'P/L $':>{pl_w}}"
+    lines.append("  " + left_header + "    " + right_header)
+    for i in range(max(len(metric_rows), len(overview["hand_types"]))):
+        left = " " * len(left_header)
+        if i < len(metric_rows):
+            name, a, b = metric_rows[i]
+            left = f"{name:<{label_w}}{a:>{num_w}}{b:>{num_w}}"
+        right = ""
+        if i < len(overview["hand_types"]):
+            label, n, won, lost, push, pl = overview["hand_types"][i]
+            right = f"{label:<{type_w}}{n:>{small_w}}{won:>{small_w}}{lost:>{small_w}}{push:>{small_w}}{_signed_money(pl):>{pl_w}}"
+        lines.append("  " + left + "    " + right)
+    lines.append("  (hand types overlap: a doubled or split hand is also counted under its own type)")
+    return lines
+
+
+def render_backups_screen(stdscr, session: GameSession) -> None:
+    backups = session.history.list_backups() if session.history is not None else []
+    lines = [f"  {'Backup name':<40}{'Database':>12}  State saved"]
+    for b in backups:
+        lines.append(f"  {b['name']:<40}{b['db_bytes'] / 1024:>9,.0f} KB  {'yes' if b['has_state'] else 'NO'}")
+    if not backups:
+        lines.append("  (none yet -- 'backup' makes one)")
+    lines.extend(["", "  restore <name>   replaces ALL current data with that backup (a prefix of the name is enough)"])
+    _render_overlay_lines(stdscr, "cs-blackjack -- Backups  (~/.cs-blackjack/backups/)", lines)
 
 
 def render_betspread_screen(stdscr) -> None:
@@ -1762,6 +1836,8 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         curses.napms(700)
         round_.reveal_doubles()
     if round_ is not None and round_.phase == Phase.SETTLED:
+        if session.history is not None:
+            session.history.record_round(session, round_)
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
         # A single-hand round's own blackjack already got its highlight
         # sound (sidebet-normal-win.wav) the moment its BLACKJACK banner
@@ -1797,8 +1873,22 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
         session.reset_hard()
         _blink_new_shoe(stdscr, session, None)
         return "Lifetime stats reset. New shoe shuffled in; session stats and bankroll reset."
+    if session.pending_restore:
+        name, session.pending_restore = session.pending_restore, None
+        if stripped != "confirm":
+            return "Restore cancelled."
+        if round_ is not None:
+            return "Finish the current round before restoring."
+        err = session.restore_backup(name)
+        if err:
+            return err
+        _blink_new_shoe(stdscr, session, None)
+        return f"Restored backup '{name}'. New shoe shuffled in; session stats reset."
     if stripped in ("help", "?"):
         render_help_screen(stdscr)
+        return ""
+    if stripped == "backups":
+        render_backups_screen(stdscr, session)
         return ""
     if stripped == "gamerules":
         render_gamerules_screen(stdscr, session)
@@ -1809,7 +1899,8 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
     if stripped == "stats":
         render_stats_screen(stdscr, session, round_)
         return ""
-    return commands.handle_command(raw, session)
+    round_in_progress = round_ is not None and round_.phase != Phase.SETTLED
+    return commands.handle_command(raw, session, round_in_progress)
 
 
 def _hit_test_cell(cell_rects: CellRects, my: int, mx: int) -> Optional[Union[str, Tuple[int, int]]]:
@@ -1836,12 +1927,15 @@ def _main(stdscr) -> None:
         pass
 
     bankroll, rules, stats, wagers, side_bet_wagers = persist.load_state()
-    session = GameSession(bankroll, rules, stats, wagers, side_bet_wagers)
+    history = HistoryDB.open()
+    session = GameSession(bankroll, rules, stats, wagers, side_bet_wagers, history=history)
     session.ensure_shoe_ready()  # validate the session's very first shoe (silently -- nothing to blink about yet)
 
     round_: Optional[Round] = None
     buffer = ""
-    message = ""
+    message = persist.take_load_warning() or (
+        f"History database unavailable -- this session won't be logged ({history.error})" if history.error else ""
+    )
     # Tracks how long the current "New shoe shuffled in..." style message
     # (there are several call sites for this, see NEW_SHOE_MESSAGE_PREFIXES
     # below) has been showing -- self-resets whenever `message` becomes
@@ -2272,7 +2366,14 @@ def _main(stdscr) -> None:
                 buffer += chr(ch)
                 continue
     finally:
+        # A round cut off by quitting (or Ctrl-C) never reached the SETTLED
+        # hook above; its wager is already off the bankroll being saved
+        # below, so the log records its unsettled hands as abandoned.
+        # record_round is a no-op for a round it already logged.
+        if round_ is not None:
+            history.record_round(session, round_)
         persist.save_state(session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers)
+        history.close(session)
 
 
 def run() -> None:
