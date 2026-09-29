@@ -6,10 +6,14 @@ from typing import TYPE_CHECKING, List
 
 from .history import BACKUP_DIR, EXPORT_DIR, EXPORT_FORMATS, EXPORT_TABLES, HistoryError
 from .rules import (
+    DOUBLE_DECK_MAX_PENETRATION,
+    MULTI_DECK_MIN_CARDS_BASE,
+    MULTI_DECK_MIN_CARDS_PER_HAND,
     RANDOM_PENETRATION_RANGE,
     SINGLE_DECK_MAX_HANDS,
     SINGLE_DECK_MAX_SPLIT_HANDS,
-    single_deck_penetration_cap,
+    SINGLE_DECK_MIN_CARDS,
+    min_cards_to_deal,
 )
 from .sidebets import side_bet_allowed
 
@@ -30,7 +34,7 @@ HELP_LINES = [
     "  surr late/early/off            Surrender mode",
     "  h17  /  s17                    Dealer hits / stands on soft 17 (next shuffle)",
     "  decks N                        Number of decks, 1-12 (next shuffle); a single deck allows 2 hands max",
-    "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
+    "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle; 2 decks max 0.80; a shoe is also cut when too few cards are left)",
     "  deckpen rand                   Random penetration (0.65-0.80) re-rolled on every new shoe",
     "  splitmax N                     Max hands from splitting non-ace pairs (single deck: 2, one split per hand)",
     "  tablemin N  /  tablemax N      Table wager limits",
@@ -45,7 +49,7 @@ HELP_LINES = [
     "  bank default N                 Set the bankroll 'bank reset' resets to",
     "",
     "TABLE SETUP",
-    "  hands 1-3                      Simultaneous hands (single deck: 1-2, locked for the shoe once dealt)",
+    "  hands 1-3                      Simultaneous hands (single deck: 1-2, changeable any time)",
     "",
     "SIDE BETS",
     "  powerpoker on/off [minbet N] [maxbet N]   Requires 3+ decks in the shoe",
@@ -92,15 +96,16 @@ HELP_TEXT = "  |  ".join(line.strip() for line in HELP_LINES if line.strip())
 _SIDEBET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
 
 
-def handle_command(raw: str, session: "GameSession", round_in_progress: bool = False) -> str:
+def handle_command(raw: str, session: "GameSession", round_in_progress: bool = False, round_open: bool = False) -> str:
     """Parse and apply a settings/betting command, returning a feedback string.
 
     Note: the 'confirm' response to a pending restore is intercepted
     earlier, in ui.py's _dispatch_command -- it needs stdscr (to blink the
     new shoe) and the current round (to refuse mid-round), neither of
     which this presentation-agnostic layer has access to. Likewise
-    round_in_progress (an unsettled round exists) is passed in by the UI for
-    the few commands that mustn't run mid-round.
+    round_in_progress (an unsettled round exists) and round_open (any round is
+    still on screen, settled or not) are passed in by the UI for the few
+    commands that mustn't run, or mustn't reshuffle, at those moments.
     """
     raw = raw.strip()
     if not raw:
@@ -114,7 +119,7 @@ def handle_command(raw: str, session: "GameSession", round_in_progress: bool = F
 
     head, rest = tokens[0], tokens[1:]
     try:
-        return _dispatch(head, rest, session, round_in_progress)
+        return _dispatch(head, rest, session, round_in_progress, round_open)
     except (CommandError, HistoryError) as exc:
         return str(exc)
 
@@ -147,7 +152,9 @@ def _parse_int(token: str, name: str) -> int:
         raise CommandError(f"'{token}' is not a valid integer for {name}")
 
 
-def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progress: bool = False) -> str:
+def _dispatch(
+    head: str, rest: List[str], session: "GameSession", round_in_progress: bool = False, round_open: bool = False
+) -> str:
     rules = session.rules
 
     if head == "das":
@@ -203,9 +210,15 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         note = ""
         if n == 1:
             note = (
-                f" (single-deck limits: at most {SINGLE_DECK_MAX_HANDS} hands, the same every round of the shoe, one split per hand; "
-                f"cut card no deeper than {single_deck_penetration_cap(1):.0%} with 1 hand, "
-                f"{single_deck_penetration_cap(2):.0%} with 2)"
+                f" (single-deck limits: at most {SINGLE_DECK_MAX_HANDS} hands, one split per hand, and the shoe is "
+                f"cut once fewer than {SINGLE_DECK_MIN_CARDS} cards would be left)"
+            )
+        elif n == 2:
+            note = f" (two-deck shoes are never cut deeper than {DOUBLE_DECK_MAX_PENETRATION:.0%})"
+        else:
+            note = (
+                f" (the shoe is cut once fewer than {MULTI_DECK_MIN_CARDS_BASE} + {MULTI_DECK_MIN_CARDS_PER_HAND} per hand "
+                f"cards would be left: {min_cards_to_deal(n, rules.num_hands)} for {rules.num_hands} hand(s))"
             )
         return f"Shoe will use {n} deck(s) starting next shuffle{note}"
 
@@ -221,11 +234,22 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         rules.random_penetration = False
         rules.penetration = p
         note = ""
-        if rules.num_decks == 1 and p > single_deck_penetration_cap(1):
+        single_deck_depth = (52 - SINGLE_DECK_MIN_CARDS) / 52
+        if rules.num_decks == 1 and p > single_deck_depth:
             note = (
-                f"; single-deck shoes are capped at {single_deck_penetration_cap(1):.2f} "
-                f"(1 hand) / {single_deck_penetration_cap(2):.2f} (2 hands)"
+                f"; a single deck is cut once fewer than {SINGLE_DECK_MIN_CARDS} cards would be left "
+                f"(about {single_deck_depth:.2f}), whatever this says"
             )
+        elif rules.num_decks == 2 and p > DOUBLE_DECK_MAX_PENETRATION:
+            note = f"; two-deck shoes are capped at {DOUBLE_DECK_MAX_PENETRATION:.2f}"
+        elif rules.num_decks >= 3:
+            floor = min_cards_to_deal(rules.num_decks, rules.num_hands)
+            depth = (52 * rules.num_decks - floor) / (52 * rules.num_decks)
+            if p > depth:
+                note = (
+                    f"; with {rules.num_hands} hand(s) the shoe is cut once fewer than {floor} cards would be left "
+                    f"(about {depth:.2f}), whatever this says"
+                )
         return f"Deck penetration set to {p:.2f} (takes effect next shuffle{note})"
 
     if head == "splitmax":
@@ -284,11 +308,10 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         if err:
             raise CommandError(err)
         note = ""
-        if session.shoe.num_decks == 1:
-            note = (
-                f" -- single-deck shoe: locked at {n} once the first hand is dealt, "
-                f"cut card at {single_deck_penetration_cap(n):.0%}"
-            )
+        if not round_open and session.ensure_shoe_ready():
+            # More hands need more cards: if the shoe has fewer than that left,
+            # reshuffle now, before any wager is sized against its count.
+            note = f" -- new shoe shuffled in (the old one was too short for {n} hand(s))"
         return f"Playing {n} hand(s) per round{note}"
 
     if head in ("powerpoker", "star21", "buster"):

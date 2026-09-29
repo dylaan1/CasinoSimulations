@@ -135,7 +135,7 @@ CREATE TABLE shoes (
     session_id       INTEGER REFERENCES sessions (session_id),
     cut_at           TEXT    NOT NULL,
     retired_at       TEXT,
-    cut_reason       TEXT    NOT NULL,   -- start | penetration | newshoe | newsession | restore (older versions also wrote hardreset)
+    cut_reason       TEXT    NOT NULL,   -- start | penetration | newshoe | newsession | mid_round (shoe ran out during a round) | restore (older versions also wrote hardreset)
     num_decks        INTEGER NOT NULL,
     penetration      REAL    NOT NULL,   -- fraction of the shoe dealt before it is reshuffled
     total_cards      INTEGER NOT NULL,
@@ -150,7 +150,7 @@ CREATE TABLE hands (
     hand_id                INTEGER PRIMARY KEY AUTOINCREMENT,
     round_id               INTEGER NOT NULL,
     session_id             INTEGER REFERENCES sessions (session_id),
-    shoe_id                INTEGER REFERENCES shoes (shoe_id),
+    shoe_id                INTEGER REFERENCES shoes (shoe_id),   -- the shoe the round STARTED on (see reshuffled_mid_round)
     played_at              TEXT    NOT NULL,
     spot_number            INTEGER NOT NULL,   -- 1-3, the on-screen "Hand #"
     hand_number            INTEGER NOT NULL,   -- 1.. within the spot, in split order
@@ -244,7 +244,18 @@ SET card_order = substr(card_order, 1, 2 * cards_dealt) || '|' || substr(card_or
 WHERE instr(card_order, '|') = 0;
 """
 
-_MIGRATIONS = [_SCHEMA_V1, _SCHEMA_V2]
+# v3: a shoe that runs out of cards mid-round is reshuffled around the cards on
+# the table and the round finishes (Round._draw). That round's hands then
+# straddle two shoes, so they're flagged: shoe_id and the *_before columns
+# (running/true count, cards dealt) describe the shoe the round STARTED on,
+# and the cards drawn after the reshuffle came from the next shoe row
+# (cut_reason 'mid_round'). For strict count-versus-bet analysis, filter these
+# rounds out with WHERE reshuffled_mid_round = 0.
+_SCHEMA_V3 = """
+ALTER TABLE hands ADD COLUMN reshuffled_mid_round INTEGER NOT NULL DEFAULT 0;
+"""
+
+_MIGRATIONS = [_SCHEMA_V1, _SCHEMA_V2, _SCHEMA_V3]
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
@@ -499,6 +510,13 @@ class HistoryDB:
         # successful write -- a round is never dropped just because the
         # database was busy for a moment.
         self._pending_rounds: List[List[Dict[str, Any]]] = []
+        # The same goes for shoe changes (a shoe closing, the next one being
+        # cut): they wait here, in order, until they can be written. A shoe
+        # whose row couldn't be created yet has a provisional (negative) id,
+        # which rounds played on it carry until the real one is known.
+        self._pending_shoe_ops: List[Tuple[str, int, Dict[str, Any]]] = []
+        self._shoe_ids: Dict[int, int] = {}  # provisional id -> real id, once written
+        self._provisional_shoe_id = 0
         self._flush_failed = False
 
     @property
@@ -631,44 +649,78 @@ class HistoryDB:
     @_guarded()
     def shoe_cut(self, session: "GameSession", reason: str) -> None:
         shoe = session.shoe
-        with self.conn:
-            self.shoe_id = self._insert(
-                "shoes",
-                {
-                    "session_id": self.session_id,
-                    "cut_at": _now(),
-                    "cut_reason": reason,
-                    "num_decks": shoe.num_decks,
-                    "penetration": shoe.penetration,
-                    "total_cards": shoe.total_cards,
-                    "blackjack_payout": session.active_rules.blackjack_payout,
-                    "hit_soft_17": int(session.active_rules.hit_soft_17),
-                    "rules_json": json.dumps(session.rules.to_dict(), sort_keys=True),
-                    # The shuffle exists only in memory for now: cards are
-                    # written as they're dealt, the rest when the shoe retires.
-                    "card_order": "",
-                },
-            )
+        fields = {
+            "session_id": self.session_id,
+            "cut_at": _now(),
+            "cut_reason": reason,
+            "num_decks": shoe.num_decks,
+            "penetration": shoe.effective_penetration,
+            "total_cards": shoe.total_cards,
+            "blackjack_payout": session.active_rules.blackjack_payout,
+            "hit_soft_17": int(session.active_rules.hit_soft_17),
+            "rules_json": json.dumps(session.rules.to_dict(), sort_keys=True),
+            # The shuffle exists only in memory for now: cards are
+            # written as they're dealt, the rest when the shoe retires.
+            "card_order": "",
+        }
+        # If the database is busy the row can't be created yet; the shoe
+        # carries a provisional id until it can (see _flush_shoe_ops).
+        self._provisional_shoe_id -= 1
+        self.shoe_id = self._provisional_shoe_id
+        self._pending_shoe_ops.append(("cut", self.shoe_id, fields))
+        self._flush_shoe_ops()
         self._refresh_stats(session)
 
     @_guarded(default=False)
     def shoe_retired(self, session: "GameSession") -> bool:
         """The shoe is done with: record how much of it was dealt and, at
         last, the cards that never were -- after a "|" so they can't be
-        mistaken for dealt ones. Returns whether it was written."""
+        mistaken for dealt ones. Returns whether it was written (if not, it
+        is kept and written as soon as the database allows)."""
         if self.shoe_id is None:
             return True
         shoe = session.shoe
-        with self.conn:
-            self._update(
-                "shoes", "shoe_id", self.shoe_id,
-                {
-                    "cards_dealt": shoe.cards_dealt,
-                    "penetration": shoe.penetration,
-                    "card_order": f"{shoe.dealt_string()}|{shoe.undealt_string()}",
-                    "retired_at": _now(),
-                },
-            )
+        fields = {
+            "cards_dealt": shoe.cards_dealt,
+            "penetration": shoe.effective_penetration,
+            "card_order": f"{shoe.dealt_string()}|{shoe.undealt_string()}",
+            "retired_at": _now(),
+        }
+        # (a retry for the same shoe replaces the earlier attempt)
+        self._pending_shoe_ops = [op for op in self._pending_shoe_ops if not (op[0] == "retire" and op[1] == self.shoe_id)]
+        self._pending_shoe_ops.append(("retire", self.shoe_id, fields))
+        return self._flush_shoe_ops()
+
+    def _flush_shoe_ops(self) -> bool:
+        """Write the queued shoe changes, in order, in one transaction. Returns
+        True when none are left waiting. Until it has succeeded the shoe rows
+        just stay as they were, and nothing is mixed up: a shoe that couldn't
+        be created yet keeps its provisional id, and the cards dealt from it
+        are written to its own row once it exists."""
+        if not self._pending_shoe_ops:
+            return True
+        if self.conn is None:
+            return False
+        created: Dict[int, int] = {}
+        try:
+            with self.conn:
+                for kind, ref, fields in self._pending_shoe_ops:
+                    if kind == "cut":
+                        created[ref] = self._insert("shoes", fields)
+                    else:
+                        real = created.get(ref, self._shoe_ids.get(ref, ref))
+                        self._update("shoes", "shoe_id", real, fields)
+        except (sqlite3.Error, OSError) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            self._flush_failed = True
+            return False
+        self._shoe_ids.update(created)
+        self._pending_shoe_ops.clear()
+        if self.shoe_id in self._shoe_ids:
+            self.shoe_id = self._shoe_ids[self.shoe_id]
+        if self._flush_failed and not self._pending_rounds:
+            self.error = None
+            self._flush_failed = False
         return True
 
     @_guarded()
@@ -878,7 +930,9 @@ class HistoryDB:
         The older counters also kept counting alongside the database for any
         play logged since it was introduced, so only the part the database
         doesn't already hold is imported: for each figure, the older total
-        minus what the tables now say, never below zero."""
+        minus what the tables now say. Counts are never taken below zero;
+        money figures can validly be negative (a losing side bet), so they
+        keep their sign."""
         block = persist.pending_legacy_stats()
         if not block:
             return True
@@ -891,8 +945,10 @@ class HistoryDB:
                     db = self._lifetime_metrics()
                     now = _now()
                     rows: Dict[str, float] = {}
-                    for name in _LIFETIME_COUNTS + _LIFETIME_MONEY:
+                    for name in _LIFETIME_COUNTS:
                         rows[name] = max(0, getattr(legacy, name) - db[name])
+                    for name in _LIFETIME_MONEY:
+                        rows[name] = getattr(legacy, name) - db[name]
                     for prefix, legacy_counts, db_counts in (
                         ("occurrence", legacy.sidebet_occurrences, db["sidebet_occurrences"]),
                         ("win", legacy.sidebet_wins, db["sidebet_wins"]),
@@ -901,7 +957,7 @@ class HistoryDB:
                             rows[f"{prefix}:{key}"] = max(0, n - db_counts.get(key, 0))
                     self.conn.executemany(
                         "INSERT INTO imported_stats (stat_key, stat_value, imported_at) VALUES (?, ?, ?)",
-                        [(k, float(v), now) for k, v in rows.items() if v > 0],
+                        [(k, float(v), now) for k, v in rows.items() if abs(v) > 1e-9],
                     )
         except (sqlite3.Error, ValueError, TypeError) as exc:
             self.error = f"{type(exc).__name__}: {exc}"
@@ -915,7 +971,11 @@ class HistoryDB:
         dealer = round_.dealer_hand
         common: Dict[str, Any] = {
             "session_id": self.session_id,
-            "shoe_id": self.shoe_id,
+            # The shoe the round STARTED on -- if the shoe ran out mid-round
+            # the log has moved on to a new one, and the *_before figures
+            # below belong to the old one.
+            "shoe_id": round_.history_shoe_id if round_.history_shoe_id is not None else self.shoe_id,
+            "reshuffled_mid_round": int(round_.reshuffled_mid_round),
             "played_at": _now(),
             "dealer_up": round_.dealer_up.token,
             "dealer_cards": cards_to_string(dealer.cards),
@@ -1028,8 +1088,10 @@ class HistoryDB:
         the session and shoe rows up to date. Returns True if nothing is
         left waiting (which includes there having been nothing to write)."""
         if not self._pending_rounds:
-            return True
+            return self._flush_shoe_ops()
         if self.conn is None:
+            return False
+        if not self._flush_shoe_ops():  # the shoes first: the rounds refer to them
             return False
         round_ids: List[int] = []
         try:
@@ -1037,7 +1099,8 @@ class HistoryDB:
                 for rows in self._pending_rounds:
                     round_id = self.conn.execute("SELECT COALESCE(MAX(round_id), 0) + 1 FROM hands").fetchone()[0]
                     for row in rows:
-                        self._insert("hands", {**row, "round_id": round_id})
+                        shoe_id = self._shoe_ids.get(row["shoe_id"], row["shoe_id"])
+                        self._insert("hands", {**row, "round_id": round_id, "shoe_id": shoe_id})
                     round_ids.append(round_id)
                 self._update("sessions", "session_id", self.session_id, self._session_fields(session, self._track))
                 if self.shoe_id is not None:
@@ -1045,7 +1108,7 @@ class HistoryDB:
                         "shoes", "shoe_id", self.shoe_id,
                         {
                             "cards_dealt": session.shoe.cards_dealt,
-                            "penetration": session.shoe.penetration,
+                            "penetration": session.shoe.effective_penetration,
                             "card_order": session.shoe.dealt_string(),  # the cards dealt so far, in order
                         },
                     )
@@ -1284,7 +1347,8 @@ class HistoryDB:
             raise HistoryError(f"Backup '{name}' has unreadable saved state.")
         _check_database(src / DB_NAME)
 
-        self.end_session(session, "restore")
+        if not self.end_session(session, "restore"):
+            raise HistoryError("The history database is busy -- nothing was changed. Try again in a moment.")
         try:
             safety = self.backup(session, label="pre-restore")
         except HistoryError:

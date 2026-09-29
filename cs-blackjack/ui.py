@@ -22,7 +22,16 @@ from .engine import (
 )
 from .hand import Hand
 from .history import HistoryDB
-from .rules import SINGLE_DECK_MAX_HANDS, SINGLE_DECK_MAX_SPLIT_HANDS, format_blackjack_payout, single_deck_penetration_cap
+from .rules import (
+    DOUBLE_DECK_MAX_PENETRATION,
+    MULTI_DECK_MIN_CARDS_BASE,
+    MULTI_DECK_MIN_CARDS_PER_HAND,
+    SINGLE_DECK_MAX_HANDS,
+    SINGLE_DECK_MAX_SPLIT_HANDS,
+    SINGLE_DECK_MIN_CARDS,
+    format_blackjack_payout,
+    min_cards_to_deal,
+)
 from .sidebets import (
     BUSTER_CATEGORIES,
     POWER_POKER_CATEGORIES,
@@ -520,7 +529,7 @@ def rules_summary(session: GameSession) -> str:
     active = session.active_rules
     soft17 = "HITS" if active.hit_soft_17 else "STANDS"
     return (
-        f"{shoe.num_decks} DECK  •  {shoe.penetration:.0%}  •  "
+        f"{shoe.num_decks} DECK  •  {shoe.effective_penetration:.0%}  •  "
         f"BJ PAYS {format_blackjack_payout(active.blackjack_payout)}  •  DEALER {soft17} ON SOFT 17"
     )
 
@@ -1483,7 +1492,7 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
     lines = [
         "GAME RULES",
         f"  Decks:               {shoe.num_decks}",
-        f"  Penetration:         {shoe.penetration:.0%}{pen_suffix}",
+        f"  Penetration:         {shoe.effective_penetration:.0%}{pen_suffix}",
         f"  Blackjack pays:      {format_blackjack_payout(active.blackjack_payout)}",
         f"  Dealer Soft 17:      {'Hits' if active.hit_soft_17 else 'Stands'}",
         f"  Double After Split:  {'ON' if r.das else 'OFF'}",
@@ -1520,20 +1529,29 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         lines.append(f"  {label:<16} {state}")
     if num_decks == 1:
         lines.append("  (single-deck Buster: 8+ card bust pays 500:1)")
-        locked = (
-            f"locked at {session.shoe_hands} until the next shuffle"
-            if session.shoe_hands is not None
-            else "can still be changed until the first hand of this shoe is dealt"
-        )
         lines += [
             "",
             "SINGLE-DECK LIMITS",
-            f"  Hands per Round:     {r.num_hands}  ({locked})",
-            f"  Max Hands:           {SINGLE_DECK_MAX_HANDS}",
+            f"  Hands per Round:     {r.num_hands}  (1 or {SINGLE_DECK_MAX_HANDS}, changeable any time)",
             f"  Splits:              one per hand (a spot splits into at most {SINGLE_DECK_MAX_SPLIT_HANDS} hands)",
-            f"  Cut Card Depth:      {single_deck_penetration_cap(1):.0%} with 1 hand, "
-            f"{single_deck_penetration_cap(2):.0%} with 2",
+            f"  Minimum Cards:       a round only starts with at least {SINGLE_DECK_MIN_CARDS} cards left",
         ]
+    elif num_decks == 2:
+        lines += ["", "TWO-DECK LIMIT", f"  Max Penetration:     {DOUBLE_DECK_MAX_PENETRATION:.0%}"]
+    else:
+        floors = " / ".join(str(min_cards_to_deal(num_decks, h)) for h in (1, 2, 3))
+        lines += [
+            "",
+            "MINIMUM CARDS",
+            f"  A round only starts with at least {MULTI_DECK_MIN_CARDS_BASE} + {MULTI_DECK_MIN_CARDS_PER_HAND} per hand cards left:",
+            f"  {floors} for 1 / 2 / 3 hands  (now: {min_cards_to_deal(num_decks, r.num_hands)} for {r.num_hands})",
+        ]
+    lines += [
+        "",
+        "RUNNING OUT OF CARDS",
+        "  If a shoe ever runs out in the middle of a round, the discards are",
+        "  shuffled back in and the round carries on (the count starts over).",
+    ]
     _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
 
 
@@ -1827,7 +1845,18 @@ def _animate_deal(stdscr, session: GameSession, round_: Round) -> None:
         curses.napms(DEAL_FRAME_MS)
 
 
+def _announce_mid_round_reshuffle(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
+    """If the shoe ran out mid-round since the last look, flash the new-shoe
+    banner once and return the message explaining it; None otherwise."""
+    if round_ is None or not round_.reshuffled_mid_round or round_.reshuffle_announced:
+        return None
+    round_.reshuffle_announced = True
+    _blink_new_shoe(stdscr, session, round_)
+    return "New shoe shuffled in mid-hand: the shoe ran out, so the discards were reshuffled and the hand continues."
+
+
 def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) -> Optional[str]:
+    reshuffle_note = _announce_mid_round_reshuffle(round_, session, stdscr)  # e.g. a hit that emptied the shoe
     dealer_bust_announced = False
     while round_ is not None and round_.phase == Phase.DEALER_TURN:
         # Covers both the dealer's hole card turning face up (the loop's
@@ -1846,6 +1875,7 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         render(stdscr, session, round_, "", "Dealer is drawing...")
         curses.napms(450)
         round_.step_dealer()
+        reshuffle_note = _announce_mid_round_reshuffle(round_, session, stdscr) or reshuffle_note
     if round_ is not None and round_.phase == Phase.REVEAL:
         render(stdscr, session, round_, "", "Revealing double down card(s)...")
         sound.play(sound.CARD_DEAL)  # face-down double/RSA cards turning face up
@@ -1878,8 +1908,8 @@ def _after_engine_change(round_: Optional[Round], session: GameSession, stdscr) 
         waiting = session.history.pending_rounds if session.history is not None else 0
         if waiting:
             return f"History database is busy (locked by another program) -- {waiting} round(s) waiting to be saved."
-        return ""
-    return None
+        return reshuffle_note or ""
+    return reshuffle_note
 
 
 def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], stdscr) -> str:
@@ -1911,7 +1941,7 @@ def _dispatch_command(raw: str, session: GameSession, round_: Optional[Round], s
         render_stats_screen(stdscr, session, round_)
         return ""
     round_in_progress = round_ is not None and round_.phase != Phase.SETTLED
-    return commands.handle_command(raw, session, round_in_progress)
+    return commands.handle_command(raw, session, round_in_progress, round_open=round_ is not None)
 
 
 def _hit_test_cell(cell_rects: CellRects, my: int, mx: int) -> Optional[Union[str, Tuple[int, int]]]:
@@ -2038,8 +2068,8 @@ def _main(stdscr, db_path: Optional[Path] = None) -> None:
                 # enough to include (or exclude) it in the deal -- no separate
                 # 'hands N' step required to actually get it dealt. That goes
                 # through the same hand-count check as 'hands N' (a single-
-                # deck shoe caps and locks it), and a refused change also
-                # leaves the wager as it was.
+                # deck shoe caps it at 2), and a refused change also leaves
+                # the wager as it was.
                 if amount > 0:
                     err = session.try_set_num_hands(max(session.rules.num_hands, bet_col + 1))
                 elif bet_col + 1 == session.rules.num_hands:
@@ -2051,6 +2081,11 @@ def _main(stdscr, db_path: Optional[Path] = None) -> None:
                     err = session.try_set_num_hands(shrink_to)
                 if err:
                     session.wagers[bet_col] = previous_wager
+                elif round_ is None and session.ensure_shoe_ready():
+                    # More hands need more cards; a shoe with fewer than that
+                    # left is reshuffled now, before a wager is sized against it.
+                    _blink_new_shoe(stdscr, session, None)
+                    message = "New shoe shuffled in: the old one was too short for that many hands."
         else:
             err = session.try_set_side_bet_wager(bet_col, ROW_KEYS[bet_row], amount)
         if err:
