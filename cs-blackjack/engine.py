@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
-from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
+from .cards import Card, Shoe, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
 from .history import HistoryError
@@ -165,7 +165,6 @@ class GameSession:
         self,
         bankroll: float,
         rules: Rules,
-        stats: Stats,
         wagers: Optional[List[float]] = None,
         side_bet_wagers: Optional[List[Dict[str, float]]] = None,
         history: Optional["HistoryDB"] = None,
@@ -173,7 +172,11 @@ class GameSession:
         self.history = history
         self.rules = rules
         self.bankroll = bankroll
-        self.stats = stats
+        # Nothing in the game counts stats: the history database does, and
+        # replaces this snapshot (HistoryDB._refresh_stats) whenever a
+        # session starts, a shoe is cut, or a round is recorded. Without a
+        # database it just stays all zeros.
+        self.stats = Stats()
         self.shoe_hands: Optional[int] = None  # hands locked in for this single-deck shoe, once its first round is dealt
         self.shoe = self._new_shoe()
         self._enforce_sidebet_deck_gate()
@@ -186,7 +189,6 @@ class GameSession:
         )
         self._quit = False
         self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession" | "bank_reset", awaiting a RETURN to confirm
-        self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
         self.pending_restore: Optional[str] = None  # backup name awaiting the literal word "confirm"
         if self.history is not None:
             self.history.start_session(self)
@@ -308,20 +310,16 @@ class GameSession:
             self.shoe.penetration = self._effective_penetration(1)
         return None
 
-    def _cut_shoe(self, reason: str, count_cut: bool = True) -> None:
+    def _cut_shoe(self, reason: str) -> None:
         """Retire the current shoe and cut a brand-new one -- the single
         path every reshuffle after the first goes through, so the history
-        log sees each one (with `reason`) no matter what triggered it.
-        count_cut=False is for the session-reset paths, whose stats reset
-        already puts shoes_played back at 1 for the shoe being cut."""
+        log sees each one (with `reason`) no matter what triggered it."""
         self._roll_penetration()
         if self.history is not None:
             self.history.shoe_retired(self)
         self.shoe = self._new_shoe()
         self._enforce_sidebet_deck_gate()
         self._commit_active_rules()
-        if count_cut:
-            self.stats.record_shoe_cut()
         if self.history is not None:
             self.history.shoe_cut(self, reason)
 
@@ -340,9 +338,9 @@ class GameSession:
             return True
         return False
 
-    def reset_shoe(self, reason: str = "newshoe", count_cut: bool = True) -> None:
+    def reset_shoe(self, reason: str = "newshoe") -> None:
         """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
-        self._cut_shoe(reason, count_cut)
+        self._cut_shoe(reason)
 
     def reset_bankroll(self) -> None:
         """Reset the bankroll to its configured default (see 'bank default'),
@@ -350,51 +348,35 @@ class GameSession:
         self.bankroll = self.rules.default_bankroll
 
     def reset_session(self, reason: str = "newsession") -> None:
-        """Forcibly cut a brand-new shoe and clear session-scoped stats.
-        Bankroll is left untouched -- see reset_bankroll()/reset_hard().
+        """Start a new session on a brand-new shoe. The bankroll is left
+        untouched -- see reset_bankroll().
 
-        The history log closes out the old session before anything is
-        zeroed and opens the new one before the new shoe is cut, so that
-        shoe is logged under the session it actually belongs to."""
+        The history log closes out the old session first and opens the new
+        one before the new shoe is cut, so that shoe is logged under the
+        session it actually belongs to; the session stats the panels show
+        start over because the new session has no hands yet."""
         if self.history is not None:
             self.history.end_session(self, reason)
-        self.stats.reset_session()
-        if self.history is not None:
             self.history.start_session(self)
-        self.reset_shoe(reason, count_cut=False)
-
-    def reset_hard(self) -> None:
-        """Full reset for 'hardreset': new shoe, session stats, lifetime
-        stats, and the bankroll, all back to their defaults. The history
-        log itself is deliberately NOT cleared -- it only records that the
-        session ended here."""
-        if self.history is not None:
-            self.history.end_session(self, "hardreset")
-        self.stats.reset_session()
-        self.stats.reset_lifetime()
-        self.reset_bankroll()
-        if self.history is not None:
-            self.history.start_session(self)
-        self.reset_shoe("hardreset", count_cut=False)
+        self.reset_shoe(reason)
 
     def restore_backup(self, name: str) -> Optional[str]:
         """Replace ALL current data (history database, bankroll, rules,
-        lifetime stats, wagers) with a saved backup, then start a fresh
-        session on a new shoe. Returns an error string, or None on success.
+        wagers) with a saved backup, then start a fresh session on a new
+        shoe. Returns an error string, or None on success.
         The caller must make sure no round is in progress."""
         if self.history is None:
             return "History database is unavailable."
         try:
-            bankroll, rules, stats, wagers, side_bet_wagers = self.history.restore(self, name)
+            bankroll, rules, wagers, side_bet_wagers = self.history.restore(self, name)
         except HistoryError as exc:
             return str(exc)
         self.bankroll = bankroll
         self.rules = rules
-        self.stats = stats
         self.wagers = wagers
         self.side_bet_wagers = side_bet_wagers
         self.history.start_session(self)
-        self.reset_shoe("restore", count_cut=False)
+        self.reset_shoe("restore")
         return None
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
@@ -833,7 +815,6 @@ class Round:
         elif hand.is_bust:
             payout, outcome = self._settle_hand(hand, dealer_bust=False, dealer_value=0, dealer_bj=False)
             self._record_settlement(spot, hand, outcome, payout)
-        self.session.stats.record_double()
 
     def _do_split(self, spot: Spot, hand: Hand) -> None:
         self.session.adjust_bankroll(-hand.bet)
@@ -855,11 +836,6 @@ class Round:
             hand.double_hidden = True
             new_hand.double_hidden = True
         spot.hands.insert(self._current_hand_index + 1, new_hand)
-        self.session.stats.record_split()
-        if is_aces:
-            self.session.stats.record_aces_split()
-        elif kept.rank in TEN_VALUE_RANKS:
-            self.session.stats.record_tens_split()
 
     def _advance_player_cursor(self) -> None:
         while self._play_cursor < len(self.play_order):
@@ -970,9 +946,6 @@ class Round:
         settlements (a lone player blackjack, an accepted even money)."""
         hand.settled = True
         self.session.adjust_bankroll(payout)
-        self.session.stats.record_hand_outcome(outcome, hand.bet, payout)
-        if hand.is_blackjack:
-            self.session.stats.record_player_blackjack()
         self.results.append(HandResult(spot.index, hand, outcome, payout))
 
     def _settle_immediate_blackjacks(self) -> None:
@@ -1047,14 +1020,14 @@ class Round:
             player_cards = spot.side_bet_snapshot
             for key, (name, fn, payouts) in evaluators.items():
                 # Evaluated regardless of whether it was actually wagered --
-                # every category's occurrence is tracked in lifetime stats
-                # purely as an event (to inform future payout tuning),
-                # independent of the side bet's own win/loss bookkeeping.
+                # every category's occurrence is recorded (in sidebet_categories,
+                # and from there in the history log) purely as an event, to
+                # inform future payout tuning, independent of the side bet's
+                # own win/loss bookkeeping.
                 outcome = fn(player_cards, self.dealer_up, payouts)
                 category_key = None
                 if outcome:
                     category_key, label, multiplier = outcome
-                    self.session.stats.record_sidebet_occurrence(key, category_key)
                 else:
                     label, multiplier = None, 0.0
                 self.sidebet_categories[(spot.index, key)] = category_key
@@ -1065,8 +1038,6 @@ class Round:
                 win = wager * (1 + multiplier) if outcome else 0.0
                 if win:
                     self.session.adjust_bankroll(win)
-                    self.session.stats.record_sidebet_win(key, category_key)
-                self.session.stats.record_side_bet(wager, win, bet_key=key)
                 self.side_bet_results.append(
                     SideBetResult(spot.index, name, wager, label, multiplier, win, key, category_key)
                 )
@@ -1083,7 +1054,6 @@ class Round:
             win = wager * 3 if dealer_bj else 0.0
             if win:
                 self.session.adjust_bankroll(win)
-            self.session.stats.record_side_bet(wager, win)
             self.side_bet_results.append(SideBetResult(spot.index, "Insurance", wager, None, 2.0, win, "insurance"))
 
     def _settle_buster(self) -> None:
@@ -1098,7 +1068,6 @@ class Round:
         category_key = None
         if outcome:
             category_key, label, multiplier = outcome
-            self.session.stats.record_sidebet_occurrence("dealer_buster", category_key)
         else:
             label, multiplier = None, 0.0
         for spot in self.spots:
@@ -1109,8 +1078,6 @@ class Round:
             win = buster_wager * (1 + multiplier) if outcome else 0.0
             if win:
                 self.session.adjust_bankroll(win)
-                self.session.stats.record_sidebet_win("dealer_buster", category_key)
-            self.session.stats.record_side_bet(buster_wager, win)
             self.side_bet_results.append(
                 SideBetResult(
                     spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win,
@@ -1122,15 +1089,6 @@ class Round:
         dealer_bust = self.dealer_hand.is_bust
         dealer_value = self.dealer_hand.best_value
         dealer_bj = self.dealer_hand.is_blackjack
-
-        if dealer_bj:
-            self.session.stats.record_dealer_blackjack()
-        elif not dealer_bust and dealer_value == 21:
-            # "Greg Special" -- the dealer hit their way up to 21 rather
-            # than being dealt it outright.
-            self.session.stats.record_greg_special()
-        if dealer_bust:
-            self.session.stats.record_dealer_bust()
 
         for spot in self.spots:
             for hand in spot.hands:

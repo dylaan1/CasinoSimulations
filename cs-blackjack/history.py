@@ -4,14 +4,17 @@ The database lives at ~/.cs-blackjack/blackjack.db and is meant to be read
 from outside the game (sqlite3, DB Browser for SQLite, DBeaver, pandas...)
 without launching it. Three tables, joined by ids:
 
-  sessions  one row per session -- from launch, or from a 'newsession'/
-            'hardreset', until the next of those or quit
+  sessions  one row per session -- from launch, or from a 'newsession',
+            until the next of those or quit
   shoes     one row per unique shuffle, with its deck count, penetration,
             and the exact card order (card_order)
   hands     one row per player hand settled (a split spot logs one row per
             resulting hand); round_id groups the hands dealt together
 
-plus two read-only views (hand_type_summary, bet_size_summary).
+plus imported_stats (lifetime numbers from before the database existed) and
+two read-only views (hand_type_summary, bet_size_summary). Every number the
+game shows on its stats panels is computed from these tables -- see
+HistoryDB.load_stats -- so the database is the single source of truth.
 
 Conventions:
   * Timestamps are UTC ISO-8601 text ("2026-09-29T15:04:05Z"); in SQLite,
@@ -19,6 +22,14 @@ Conventions:
   * Booleans are 0/1 integers, money is REAL dollars.
   * A card is a two-character token -- rank (T = ten) then suit glyph, e.g.
     "T♦" -- and a card sequence is those tokens run together, "K♣T♦3♠".
+  * shoes.card_order is the shuffle in dealing order. The order is only ever
+    held in memory while a shoe is in play: each round appends the cards it
+    dealt, and once the shoe is retired -- on a reshuffle, or on any way of
+    leaving the game short of the process being killed outright -- the cards
+    that were never dealt are added after a "|", so "K♣T♦3♠|7♥A♠..." reads
+    dealt | never dealt. No "|" means the shoe is still in play, or was cut
+    off by a hard kill (power loss, SIGKILL) that gave the game no chance to
+    write the rest.
   * Side bets and insurance belong to a spot, not to one of its split hands,
     so they're recorded on the spot's first hand (hand_number = 1) and are
     0/NULL on its other hands; summing a column over hands therefore never
@@ -39,6 +50,7 @@ import json
 import os
 import shutil
 import sqlite3
+import time
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +59,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from . import persist
 from .cards import cards_to_string
 from .hand import Hand
+from .stats import Stats
 
 if TYPE_CHECKING:  # pragma: no cover
     from .engine import GameSession, Round
@@ -62,6 +75,15 @@ EXPORT_TABLES = ("hands", "sessions", "shoes")
 EXPORT_FORMATS = ("csv", "json")
 
 _SIDE_BET_KEYS = ("power_poker", "star21", "dealer_buster")
+
+# The lifetime Stats fields, split by whether they're counts or dollar amounts
+# (the counters an imported pre-database baseline can add to).
+_LIFETIME_COUNTS = (
+    "hands_lifetime", "player_wins", "dealer_wins", "pushes", "surrenders_lifetime", "sessions_played",
+)
+_LIFETIME_MONEY = (
+    "lifetime_main_wagered", "lifetime_main_pl", "lifetime_sidebet_pl", "lifetime_power_poker_pl", "lifetime_star21_pl",
+)
 _OUTCOMES = {"player_win": "win", "dealer_win": "loss", "push": "push", "surrender": "surrender"}
 
 
@@ -79,7 +101,7 @@ CREATE TABLE sessions (
     session_id          INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at          TEXT    NOT NULL,
     ended_at            TEXT,                -- NULL while the session is still running
-    end_reason          TEXT,                -- quit | newsession | hardreset | restore | abandoned (crashed or killed)
+    end_reason          TEXT,                -- quit | newsession | restore | abandoned (crashed or killed); older versions also wrote hardreset
     starting_bankroll   REAL    NOT NULL,
     ending_bankroll     REAL    NOT NULL,
     peak_bankroll       REAL    NOT NULL,
@@ -113,7 +135,7 @@ CREATE TABLE shoes (
     session_id       INTEGER REFERENCES sessions (session_id),
     cut_at           TEXT    NOT NULL,
     retired_at       TEXT,
-    cut_reason       TEXT    NOT NULL,   -- start | penetration | newshoe | newsession | hardreset | restore
+    cut_reason       TEXT    NOT NULL,   -- start | penetration | newshoe | newsession | restore (older versions also wrote hardreset)
     num_decks        INTEGER NOT NULL,
     penetration      REAL    NOT NULL,   -- fraction of the shoe dealt before it is reshuffled
     total_cards      INTEGER NOT NULL,
@@ -121,7 +143,7 @@ CREATE TABLE shoes (
     blackjack_payout REAL    NOT NULL,   -- 1.5 = 3:2, 1.2 = 6:5, as active for this shoe
     hit_soft_17      INTEGER NOT NULL,
     rules_json       TEXT    NOT NULL,   -- every table rule and side-bet payout as of the cut
-    card_order       TEXT    NOT NULL    -- the whole shuffle, first card dealt first
+    card_order       TEXT    NOT NULL    -- dealt cards in order, then "|", then the never-dealt rest (see module doc)
 );
 
 CREATE TABLE hands (
@@ -206,7 +228,23 @@ WHERE outcome <> 'abandoned'
 GROUP BY initial_bet;
 """
 
-_MIGRATIONS = [_SCHEMA_V1]
+# v2: lifetime stats now come from the database, so the numbers an older
+# version of the game counted itself (before there was a database) get a home;
+# and card_order gains its dealt|never-dealt marker -- every v1 row already
+# holds its whole shuffle, so it just needs the "|" put in at cards_dealt.
+_SCHEMA_V2 = """
+CREATE TABLE imported_stats (
+    stat_key    TEXT PRIMARY KEY,   -- a lifetime counter (hands_lifetime, lifetime_main_pl, ...) or occurrence:<bet>:<category> / win:<bet>:<category>
+    stat_value  REAL NOT NULL,
+    imported_at TEXT NOT NULL
+);
+
+UPDATE shoes
+SET card_order = substr(card_order, 1, 2 * cards_dealt) || '|' || substr(card_order, 2 * cards_dealt + 1)
+WHERE instr(card_order, '|') = 0;
+"""
+
+_MIGRATIONS = [_SCHEMA_V1, _SCHEMA_V2]
 SCHEMA_VERSION = len(_MIGRATIONS)
 
 
@@ -250,6 +288,13 @@ def _guarded(default: Any = None):
         return inner
 
     return wrap
+
+
+def _merge_counts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
+    merged = dict(a)
+    for key, n in b.items():
+        merged[key] = merged.get(key, 0) + n
+    return merged
 
 
 def _hand_type(hand: Hand) -> Tuple[str, int]:
@@ -304,6 +349,123 @@ def _copy_database(src: Path, dst: Path) -> None:
         src_conn.close()
 
 
+# ---- MySQL dump ----------------------------------------------------------
+# The MySQL table definitions are generated from the SQLite ones (PRAGMA
+# table_info and friends) rather than written out by hand, so they can never
+# drift from the real schema as it grows.
+
+_MYSQL_TABLE_ORDER = ("sessions", "shoes", "hands")  # parents before children; anything else follows
+_MYSQL_ROWS_PER_INSERT = 250
+_MYSQL_ESCAPES = {"\\": "\\\\", "'": "''", "\0": "\\0", "\n": "\\n", "\r": "\\r", "\x1a": "\\Z"}
+
+
+def _mysql_quote(name: str) -> str:
+    return "`" + name.replace("`", "``") + "`"
+
+
+def _mysql_string(value: str) -> str:
+    return "'" + "".join(_MYSQL_ESCAPES.get(ch, ch) for ch in value) + "'"
+
+
+def _mysql_literal(value: Any, column: str) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value) if value == value and value not in (float("inf"), float("-inf")) else "NULL"
+    text = str(value)
+    if column.endswith("_at"):  # UTC ISO-8601 text -> a MySQL DATETIME literal
+        text = text.replace("T", " ").rstrip("Z")
+    return _mysql_string(text)
+
+
+def _mysql_table_ddl(conn: sqlite3.Connection, table: str) -> str:
+    columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    pk_columns = [c["name"] for c in columns if c["pk"]]
+    lines = []
+    for c in columns:
+        name, declared = c["name"], (c["type"] or "").upper()
+        if name.endswith("_at"):
+            sql_type = "DATETIME"
+        elif "INT" in declared:
+            sql_type = "INT"
+        elif declared in ("REAL", "FLOAT", "DOUBLE"):
+            sql_type = "DOUBLE"
+        else:
+            sql_type = "VARCHAR(255)" if c["pk"] else "TEXT"  # MySQL can't key a bare TEXT column
+        parts = [_mysql_quote(name), sql_type]
+        if c["notnull"] or c["pk"]:
+            parts.append("NOT NULL")
+        if c["pk"] and sql_type == "INT" and len(pk_columns) == 1:
+            parts.append("AUTO_INCREMENT")
+        if c["dflt_value"] is not None and sql_type != "TEXT":
+            parts.append(f"DEFAULT {c['dflt_value']}")
+        lines.append("  " + " ".join(parts))
+    if pk_columns:
+        lines.append("  PRIMARY KEY (" + ", ".join(_mysql_quote(n) for n in pk_columns) + ")")
+    for idx in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        if idx["origin"] != "c":  # only the CREATE INDEX ones; primary keys are declared above
+            continue
+        cols = [r["name"] for r in conn.execute(f"PRAGMA index_info({idx['name']})").fetchall()]
+        lines.append(f"  KEY {_mysql_quote(idx['name'])} (" + ", ".join(_mysql_quote(n) for n in cols) + ")")
+    for fk in conn.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+        child, parent, parent_col = fk["from"], fk["table"], fk["to"]
+        lines.append(
+            f"  CONSTRAINT {_mysql_quote('fk_' + table + '_' + child)} "
+            f"FOREIGN KEY ({_mysql_quote(child)}) REFERENCES {_mysql_quote(parent)} ({_mysql_quote(parent_col)})"
+        )
+    return (
+        f"CREATE TABLE {_mysql_quote(table)} (\n" + ",\n".join(lines) + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n"
+    )
+
+
+def _mysql_dump(conn: sqlite3.Connection):
+    """Yield the dump script piece by piece (rows are streamed, not held)."""
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")]
+    tables.sort(key=lambda t: (_MYSQL_TABLE_ORDER.index(t) if t in _MYSQL_TABLE_ORDER else len(_MYSQL_TABLE_ORDER), t))
+    views = conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'view' ORDER BY name").fetchall()
+
+    yield (
+        "-- cs-blackjack history export for MySQL / MariaDB\n"
+        f"-- Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} from {DB_NAME}. All timestamps are UTC.\n"
+        "--\n"
+        "-- Load it into an EMPTY schema you've chosen (it drops and recreates these tables):\n"
+        "--   mysql -u USER -p SCHEMA_NAME < this-file.sql\n"
+        "-- or in MySQL Workbench: Server > Data Import > Import from Self-Contained File,\n"
+        "-- with the target schema selected.\n\n"
+        "SET NAMES utf8mb4;\n"
+        "SET SESSION sql_mode = REPLACE(@@sql_mode, 'NO_BACKSLASH_ESCAPES', '');\n"
+        "SET SESSION time_zone = '+00:00';\n"
+        "SET FOREIGN_KEY_CHECKS = 0;\n\n"
+    )
+    for view in views:
+        yield f"DROP VIEW IF EXISTS {_mysql_quote(view['name'])};\n"
+    for table in reversed(tables):
+        yield f"DROP TABLE IF EXISTS {_mysql_quote(table)};\n"
+    yield "\n"
+    for table in tables:
+        yield _mysql_table_ddl(conn, table) + "\n"
+        columns = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})")]
+        header = f"INSERT INTO {_mysql_quote(table)} (" + ", ".join(_mysql_quote(c) for c in columns) + ") VALUES\n"
+        cursor = conn.execute(f"SELECT * FROM {table} ORDER BY 1")
+        while True:
+            batch = cursor.fetchmany(_MYSQL_ROWS_PER_INSERT)
+            if not batch:
+                break
+            rows = ",\n".join(
+                "(" + ", ".join(_mysql_literal(row[i], columns[i]) for i in range(len(columns))) + ")" for row in batch
+            )
+            yield header + rows + ";\n"
+        yield "\n"
+    for view in views:
+        yield view["sql"].rstrip().rstrip(";") + ";\n\n"
+    yield "SET FOREIGN_KEY_CHECKS = 1;\n"
+
+
 @dataclass
 class _Tracking:
     """Running figures for the current session that don't live in Stats."""
@@ -330,6 +492,18 @@ class HistoryDB:
         self.shoe_id: Optional[int] = None
         self._track = _Tracking()
         self._last_round: Optional["Round"] = None
+        self._life_cache: Optional[Dict[str, Any]] = None  # lifetime aggregates over the hands table, see _lifetime_metrics
+        # Rounds whose rows are ready but not yet in the database because a
+        # write failed (typically another program holding the database
+        # locked). They're kept, in order, and written with the next
+        # successful write -- a round is never dropped just because the
+        # database was busy for a moment.
+        self._pending_rounds: List[List[Dict[str, Any]]] = []
+        self._flush_failed = False
+
+    @property
+    def pending_rounds(self) -> int:
+        return len(self._pending_rounds)
 
     @classmethod
     def open(cls, path: Optional[Path] = None) -> "HistoryDB":
@@ -349,6 +523,7 @@ class HistoryDB:
             conn.execute("PRAGMA foreign_keys = ON")
             _migrate(conn)
             self.conn = conn
+            self._life_cache = None
             self._close_stale_sessions()
         except (sqlite3.Error, OSError, HistoryError) as exc:
             self.error = f"{type(exc).__name__}: {exc}" if not isinstance(exc, HistoryError) else str(exc)
@@ -402,56 +577,54 @@ class HistoryDB:
                     "lowest_bankroll": session.bankroll,
                 },
             )
+        self._refresh_stats(session)
 
     def _session_fields(self, session: "GameSession", track: _Tracking) -> Dict[str, Any]:
-        """The session row's current values. Counts come from the in-game
-        session stats; the money totals are summed from the session's own
-        hand rows instead (call inside the transaction that wrote them), so
-        they always equal SUM() over `hands` -- including a round abandoned
-        by quitting, whose forfeited wager the stats never saw."""
-        s = session.stats
-        wagered, main_pl, sidebet_pl = self.conn.execute(
-            """SELECT COALESCE(SUM(final_bet), 0), COALESCE(SUM(main_pl), 0), COALESCE(SUM(sidebet_pl), 0)
-               FROM hands WHERE session_id = ?""",
-            (self.session_id,),
-        ).fetchone()
+        """The session row's current values, all computed from the session's
+        own hand rows (call inside the transaction that wrote them) -- the
+        same numbers, from the same code, that the stats panels show -- plus
+        the bankroll figures tracked as the session goes."""
+        m = self._session_metrics(self.session_id)
         return {
             "ending_bankroll": session.bankroll,
             "peak_bankroll": track.peak_bankroll,
             "lowest_bankroll": track.lowest_bankroll,
             "max_drawdown": track.max_drawdown,
             "rounds_played": track.rounds,
-            "hands_played": s.hands_this_session,
-            "hands_won": s.session_player_wins,
-            "hands_lost": s.session_dealer_wins,
-            "hands_pushed": s.session_pushes,
-            "hands_surrendered": s.surrenders,
-            "doubles": s.doubles,
-            "splits": s.splits,
-            "aces_split": s.aces_split,
-            "tens_split": s.tens_split,
-            "player_blackjacks": s.player_blackjacks,
-            "dealer_blackjacks": s.dealer_blackjacks,
-            "dealer_pulled_21s": s.greg_specials,
-            "dealer_busts": s.dealer_busts,
-            "shoes_played": s.shoes_played,
-            "main_wagered": wagered,
-            "main_pl": main_pl,
-            "sidebet_pl": sidebet_pl,
-            "net_pl": main_pl + sidebet_pl,
-            "longest_win_streak": s.longest_win_streak,
-            "longest_loss_streak": s.longest_loss_streak,
+            "hands_played": m["hands_this_session"],
+            "hands_won": m["session_player_wins"],
+            "hands_lost": m["session_dealer_wins"],
+            "hands_pushed": m["session_pushes"],
+            "hands_surrendered": m["surrenders"],
+            "doubles": m["doubles"],
+            "splits": m["splits"],
+            "aces_split": m["aces_split"],
+            "tens_split": m["tens_split"],
+            "player_blackjacks": m["player_blackjacks"],
+            "dealer_blackjacks": m["dealer_blackjacks"],
+            "dealer_pulled_21s": m["greg_specials"],
+            "dealer_busts": m["dealer_busts"],
+            "shoes_played": m["shoes_played"],
+            "main_wagered": m["main_wagered"],
+            "main_pl": m["session_main_pl"],
+            "sidebet_pl": m["session_sidebet_pl"],
+            "net_pl": m["session_main_pl"] + m["session_sidebet_pl"],
+            "longest_win_streak": m["longest_win_streak"],
+            "longest_loss_streak": m["longest_loss_streak"],
         }
 
-    @_guarded()
-    def end_session(self, session: "GameSession", reason: str) -> None:
+    @_guarded(default=False)
+    def end_session(self, session: "GameSession", reason: str) -> bool:
         if self.session_id is None:
-            return
+            return True
+        if not self._flush_pending(session):
+            return False
         fields = self._session_fields(session, self._track)
         fields.update(ended_at=_now(), end_reason=reason)
         with self.conn:
             self._update("sessions", "session_id", self.session_id, fields)
         self.session_id = None
+        return True
 
     # ---- shoes ----
 
@@ -471,26 +644,270 @@ class HistoryDB:
                     "blackjack_payout": session.active_rules.blackjack_payout,
                     "hit_soft_17": int(session.active_rules.hit_soft_17),
                     "rules_json": json.dumps(session.rules.to_dict(), sort_keys=True),
-                    "card_order": shoe.order_string(),
+                    # The shuffle exists only in memory for now: cards are
+                    # written as they're dealt, the rest when the shoe retires.
+                    "card_order": "",
                 },
             )
+        self._refresh_stats(session)
 
-    @_guarded()
-    def shoe_retired(self, session: "GameSession") -> None:
+    @_guarded(default=False)
+    def shoe_retired(self, session: "GameSession") -> bool:
+        """The shoe is done with: record how much of it was dealt and, at
+        last, the cards that never were -- after a "|" so they can't be
+        mistaken for dealt ones. Returns whether it was written."""
         if self.shoe_id is None:
-            return
+            return True
+        shoe = session.shoe
         with self.conn:
             self._update(
                 "shoes", "shoe_id", self.shoe_id,
-                {"cards_dealt": session.shoe.cards_dealt, "penetration": session.shoe.penetration, "retired_at": _now()},
+                {
+                    "cards_dealt": shoe.cards_dealt,
+                    "penetration": shoe.penetration,
+                    "card_order": f"{shoe.dealt_string()}|{shoe.undealt_string()}",
+                    "retired_at": _now(),
+                },
             )
+        return True
 
     @_guarded()
     def close(self, session: "GameSession", reason: str = "quit") -> None:
-        self.shoe_retired(session)
-        self.end_session(session, reason)
+        # This is the last chance to write anything, so if the database is
+        # busy (another program holds it), try a second time before giving up.
+        for attempt in range(2):
+            if self._flush_pending(session) and self.shoe_retired(session) and self.end_session(session, reason):
+                break
+            if attempt == 0:
+                time.sleep(0.5)
         self.conn.close()
         self.conn = None
+
+    # ---- stats: every number on the stats panels, computed from the tables ----
+
+    def _refresh_stats(self, session: "GameSession") -> None:
+        """Replace session.stats with a fresh read of the database."""
+        stats = self.load_stats()
+        if stats is not None:
+            session.stats = stats
+
+    @_guarded()
+    def load_stats(self) -> Stats:
+        """Build the Stats the game displays: lifetime totals over everything
+        in the database (plus the imported pre-database baseline) and this
+        session's own numbers. Hand tallies count settled hands only; the
+        money figures also include the forfeited wager of a hand still
+        unsettled when the game was quit ('abandoned'), since that money is
+        genuinely gone from the bankroll."""
+        stats = Stats()
+        life = self._lifetime_metrics()
+        base_numeric, base_occurrences, base_wins = self._baseline()
+        for name in _LIFETIME_COUNTS:
+            setattr(stats, name, int(life[name] + base_numeric.get(name, 0)))
+        for name in _LIFETIME_MONEY:
+            setattr(stats, name, float(life[name] + base_numeric.get(name, 0.0)))
+        stats.sidebet_occurrences = _merge_counts(life["sidebet_occurrences"], base_occurrences)
+        stats.sidebet_wins = _merge_counts(life["sidebet_wins"], base_wins)
+        if self.session_id is not None:
+            for name, value in self._session_metrics(self.session_id).items():
+                if hasattr(stats, name):
+                    setattr(stats, name, value)
+        return stats
+
+    def _session_metrics(self, sid: int) -> Dict[str, Any]:
+        """One session's numbers, keyed by the Stats field they fill (plus
+        main_wagered, which only the sessions table keeps)."""
+        c = self.conn
+        hands, won, lost, pushed, surrendered, doubles, blackjacks, wagered, main_pl, side_pl = c.execute(
+            """SELECT COALESCE(SUM(outcome <> 'abandoned'), 0), COALESCE(SUM(outcome = 'win'), 0),
+                      COALESCE(SUM(outcome = 'loss'), 0), COALESCE(SUM(outcome = 'push'), 0),
+                      COALESCE(SUM(outcome = 'surrender'), 0), COALESCE(SUM(doubled), 0),
+                      COALESCE(SUM(player_blackjack), 0), COALESCE(SUM(final_bet), 0),
+                      COALESCE(SUM(main_pl), 0), COALESCE(SUM(sidebet_pl), 0)
+               FROM hands WHERE session_id = ?""",
+            (sid,),
+        ).fetchone()
+
+        def splits(where: str) -> int:
+            # A spot that ends up with n hands was split n - 1 times.
+            return c.execute(
+                f"""SELECT COALESCE(SUM(n - 1), 0) FROM
+                      (SELECT COUNT(*) AS n FROM hands WHERE session_id = ? AND {where}
+                       GROUP BY round_id, spot_number)""",
+                (sid,),
+            ).fetchone()[0]
+
+        dealer_bj, dealer_21, dealer_bust = c.execute(
+            """SELECT COUNT(DISTINCT CASE WHEN dealer_blackjack = 1 THEN round_id END),
+                      COUNT(DISTINCT CASE WHEN dealer_total = 21 AND dealer_blackjack = 0 AND dealer_bust = 0
+                                          THEN round_id END),
+                      COUNT(DISTINCT CASE WHEN dealer_bust = 1 THEN round_id END)
+               FROM hands WHERE session_id = ? AND outcome <> 'abandoned'""",
+            (sid,),
+        ).fetchone()
+
+        streak = longest_win = longest_loss = 0
+        for (outcome,) in c.execute(
+            "SELECT outcome FROM hands WHERE session_id = ? AND outcome IN ('win', 'loss') ORDER BY hand_id", (sid,)
+        ):
+            if outcome == "win":
+                streak = streak + 1 if streak >= 0 else 1
+                longest_win = max(longest_win, streak)
+            else:
+                streak = streak - 1 if streak <= 0 else -1
+                longest_loss = max(longest_loss, -streak)
+
+        return {
+            "hands_this_session": hands,
+            "session_player_wins": won,
+            "session_dealer_wins": lost,
+            "session_pushes": pushed,
+            "surrenders": surrendered,
+            "doubles": doubles,
+            "splits": splits("is_split = 1"),
+            "aces_split": splits("is_split_aces = 1"),
+            "tens_split": splits("is_split = 1 AND is_split_aces = 0 AND substr(player_cards, 1, 1) IN ('T', 'J', 'Q', 'K')"),
+            "player_blackjacks": blackjacks,
+            "dealer_blackjacks": dealer_bj,
+            "greg_specials": dealer_21,
+            "dealer_busts": dealer_bust,
+            "current_streak": streak,
+            "longest_win_streak": longest_win,
+            "longest_loss_streak": longest_loss,
+            "shoes_played": c.execute("SELECT COUNT(*) FROM shoes WHERE session_id = ?", (sid,)).fetchone()[0],
+            "main_wagered": wagered,
+            "session_main_pl": main_pl,
+            "session_sidebet_pl": side_pl,
+        }
+
+    def _lifetime_metrics(self) -> Dict[str, Any]:
+        """Lifetime totals from the tables alone (no imported baseline),
+        keyed by Stats field, with the per-category side-bet dicts.
+
+        The whole hands table is scanned once; after that each recorded round
+        just adds its own rows (_add_round_to_lifetime), so this stays fast
+        however large the database grows."""
+        if self._life_cache is None:
+            self._life_cache = self._scan_lifetime("")
+        metrics = dict(self._life_cache)
+        metrics["sessions_played"] = self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        return metrics
+
+    def _scan_lifetime(self, where: str, params: tuple = ()) -> Dict[str, Any]:
+        """The lifetime aggregates over the hands rows matching `where` (all of
+        them when empty)."""
+        c = self.conn
+        hands, won, lost, pushed, surrendered, wagered, main_pl, side_pl, pp_pl, s21_pl = c.execute(
+            f"""SELECT COALESCE(SUM(outcome <> 'abandoned'), 0), COALESCE(SUM(outcome = 'win'), 0),
+                       COALESCE(SUM(outcome = 'loss'), 0), COALESCE(SUM(outcome = 'push'), 0),
+                       COALESCE(SUM(outcome = 'surrender'), 0), COALESCE(SUM(final_bet), 0),
+                       COALESCE(SUM(main_pl), 0), COALESCE(SUM(sidebet_pl), 0),
+                       COALESCE(SUM(power_poker_pl), 0), COALESCE(SUM(star21_pl), 0)
+                FROM hands {where}""",
+            params,
+        ).fetchone()
+        occurrences: Dict[str, int] = {}
+        wins: Dict[str, int] = {}
+        # Power Poker and Star 21 log their category on each spot's first hand
+        # (wagered or not); Dealer Buster is one event per round however many
+        # spots there were, but pays out per wagered spot.
+        for bet, counted in (
+            ("power_poker", "COUNT(*)"),
+            ("star21", "COUNT(*)"),
+            ("dealer_buster", "COUNT(DISTINCT round_id)"),
+        ):
+            clause = f"{where + ' AND' if where else 'WHERE'} {bet}_category IS NOT NULL"
+            for category, n, paid in c.execute(
+                f"""SELECT {bet}_category, {counted}, COALESCE(SUM({bet}_wager > 0), 0) FROM hands
+                    {clause} GROUP BY {bet}_category""",
+                params,
+            ):
+                occurrences[f"{bet}:{category}"] = n
+                if paid:
+                    wins[f"{bet}:{category}"] = paid
+        return {
+            "hands_lifetime": hands,
+            "player_wins": won,
+            "dealer_wins": lost,
+            "pushes": pushed,
+            "surrenders_lifetime": surrendered,
+            "lifetime_main_wagered": wagered,
+            "lifetime_main_pl": main_pl,
+            "lifetime_sidebet_pl": side_pl,
+            "lifetime_power_poker_pl": pp_pl,
+            "lifetime_star21_pl": s21_pl,
+            "sidebet_occurrences": occurrences,
+            "sidebet_wins": wins,
+        }
+
+    def _add_round_to_lifetime(self, round_id: int) -> None:
+        """Fold one just-recorded round into the cached lifetime totals."""
+        if self._life_cache is None:
+            return  # nothing cached yet: the next read scans everything, this round included
+        delta = self._scan_lifetime("WHERE round_id = ?", (round_id,))
+        merged: Dict[str, Any] = {}
+        for key, value in self._life_cache.items():
+            if key in ("sidebet_occurrences", "sidebet_wins"):
+                merged[key] = _merge_counts(value, delta[key])
+            else:
+                merged[key] = value + delta[key]
+        self._life_cache = merged
+
+    def _baseline(self) -> Tuple[Dict[str, float], Dict[str, int], Dict[str, int]]:
+        """The imported pre-database lifetime numbers: (counters, side-bet
+        occurrences, side-bet wins)."""
+        numeric: Dict[str, float] = {}
+        occurrences: Dict[str, int] = {}
+        wins: Dict[str, int] = {}
+        for key, value in self.conn.execute("SELECT stat_key, stat_value FROM imported_stats"):
+            if key.startswith("occurrence:"):
+                occurrences[key[len("occurrence:"):]] = int(value)
+            elif key.startswith("win:"):
+                wins[key[len("win:"):]] = int(value)
+            else:
+                numeric[key] = value
+        return numeric, occurrences, wins
+
+    def import_pending_legacy_stats(self) -> bool:
+        """Take in the lifetime stats an older version of the game kept in its
+        state file (before there was a database), once. Returns True when
+        nothing is left waiting -- either there was nothing, or it's now in
+        the database -- and False if it couldn't be imported (it then stays in
+        the state file, untouched, for the next launch).
+
+        The older counters also kept counting alongside the database for any
+        play logged since it was introduced, so only the part the database
+        doesn't already hold is imported: for each figure, the older total
+        minus what the tables now say, never below zero."""
+        block = persist.pending_legacy_stats()
+        if not block:
+            return True
+        if self.conn is None:
+            return False
+        try:
+            with self.conn:
+                if self.conn.execute("SELECT COUNT(*) FROM imported_stats").fetchone()[0] == 0:
+                    legacy = Stats.from_legacy_dict(block)
+                    db = self._lifetime_metrics()
+                    now = _now()
+                    rows: Dict[str, float] = {}
+                    for name in _LIFETIME_COUNTS + _LIFETIME_MONEY:
+                        rows[name] = max(0, getattr(legacy, name) - db[name])
+                    for prefix, legacy_counts, db_counts in (
+                        ("occurrence", legacy.sidebet_occurrences, db["sidebet_occurrences"]),
+                        ("win", legacy.sidebet_wins, db["sidebet_wins"]),
+                    ):
+                        for key, n in legacy_counts.items():
+                            rows[f"{prefix}:{key}"] = max(0, n - db_counts.get(key, 0))
+                    self.conn.executemany(
+                        "INSERT INTO imported_stats (stat_key, stat_value, imported_at) VALUES (?, ?, ?)",
+                        [(k, float(v), now) for k, v in rows.items() if v > 0],
+                    )
+        except (sqlite3.Error, ValueError, TypeError) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            return False
+        persist.clear_legacy_stats()
+        return True
 
     # ---- rounds / hands ----
 
@@ -586,7 +1003,7 @@ class HistoryDB:
         forfeited -- which is what actually happened to the bankroll."""
         if self.session_id is None or round_ is self._last_round:
             return
-        rows = self._round_rows(session, round_)
+        rows = self._round_rows(session, round_)   # a plain snapshot of the round, taken now
         cut_off = any(r["outcome"] == "abandoned" for r in rows)
 
         track = replace(self._track)
@@ -599,18 +1016,51 @@ class HistoryDB:
         if not cut_off:
             track.rounds += 1
 
-        with self.conn:
-            round_id = self.conn.execute("SELECT COALESCE(MAX(round_id), 0) + 1 FROM hands").fetchone()[0]
-            for row in rows:
-                self._insert("hands", {**row, "round_id": round_id})
-            self._update("sessions", "session_id", self.session_id, self._session_fields(session, track))
-            if self.shoe_id is not None:
-                self._update(
-                    "shoes", "shoe_id", self.shoe_id,
-                    {"cards_dealt": session.shoe.cards_dealt, "penetration": session.shoe.penetration},
-                )
+        # From here the round is safely in hand: it's queued, so even if the
+        # write below fails it stays queued for the next attempt.
         self._track = track
         self._last_round = round_
+        self._pending_rounds.append(rows)
+        self._flush_pending(session)
+
+    def _flush_pending(self, session: "GameSession") -> bool:
+        """Write every queued round, in order, in one transaction, and bring
+        the session and shoe rows up to date. Returns True if nothing is
+        left waiting (which includes there having been nothing to write)."""
+        if not self._pending_rounds:
+            return True
+        if self.conn is None:
+            return False
+        round_ids: List[int] = []
+        try:
+            with self.conn:
+                for rows in self._pending_rounds:
+                    round_id = self.conn.execute("SELECT COALESCE(MAX(round_id), 0) + 1 FROM hands").fetchone()[0]
+                    for row in rows:
+                        self._insert("hands", {**row, "round_id": round_id})
+                    round_ids.append(round_id)
+                self._update("sessions", "session_id", self.session_id, self._session_fields(session, self._track))
+                if self.shoe_id is not None:
+                    self._update(
+                        "shoes", "shoe_id", self.shoe_id,
+                        {
+                            "cards_dealt": session.shoe.cards_dealt,
+                            "penetration": session.shoe.penetration,
+                            "card_order": session.shoe.dealt_string(),  # the cards dealt so far, in order
+                        },
+                    )
+        except (sqlite3.Error, OSError) as exc:
+            self.error = f"{type(exc).__name__}: {exc}"
+            self._flush_failed = True
+            return False
+        self._pending_rounds.clear()
+        for round_id in round_ids:
+            self._add_round_to_lifetime(round_id)
+        self._refresh_stats(session)
+        if self._flush_failed:  # a problem earlier, and the queue has now cleared: recovered
+            self.error = None
+            self._flush_failed = False
+        return True
 
     # ---- read-side, for the in-game stats screen ----
 
@@ -724,6 +1174,23 @@ class HistoryDB:
             raise HistoryError(f"Export failed: {exc}")
         return out
 
+    def export_mysql(self) -> Path:
+        """Write ~/.cs-blackjack/exports/mysql-<timestamp>.sql: the whole
+        database as a self-contained MySQL/MariaDB script (tables, rows,
+        views) that recreates it in an empty schema."""
+        if self.conn is None:
+            raise HistoryError(f"History database is unavailable ({self.error}).")
+        out = EXPORT_DIR / f"mysql-{datetime.now().strftime('%Y%m%d-%H%M%S')}.sql"
+        try:
+            EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(out, "w", encoding="utf8", newline="\n") as fh:
+                for chunk in _mysql_dump(self.conn):
+                    fh.write(chunk)
+        except (sqlite3.Error, OSError) as exc:
+            out.unlink(missing_ok=True)
+            raise HistoryError(f"Export failed: {exc}")
+        return out
+
     @staticmethod
     def _write_rows(path: Path, header: List[str], rows: List[tuple], fmt: str) -> None:
         if fmt == "json":
@@ -754,9 +1221,7 @@ class HistoryDB:
         try:
             dest.mkdir(parents=True)
             if session is not None:
-                persist.save_state(
-                    session.bankroll, session.rules, session.stats, session.wagers, session.side_bet_wagers
-                )
+                persist.save_state(session.bankroll, session.rules, session.wagers, session.side_bet_wagers)
             dst = sqlite3.connect(dest / DB_NAME)
             try:
                 self.conn.backup(dst)
@@ -844,4 +1309,8 @@ class HistoryDB:
         self.shoe_id = None
         self._last_round = None
         self._connect()
+        # A backup made before stats moved into the database carries its
+        # lifetime numbers in its state file; the same one-time import applies.
+        persist.set_legacy_stats(persist.read_legacy_stats(persist.STATE_PATH))
+        self.import_pending_legacy_stats()
         return state

@@ -42,7 +42,7 @@ HELP_LINES = [
     "  bank N                         Set bankroll to N",
     "  bank add N                     Add N to bankroll",
     "  bank reset                     Reset bankroll to its default (RETURN confirms)",
-    "  bank default N                 Set the bankroll 'bank reset'/hardreset reset to",
+    "  bank default N                 Set the bankroll 'bank reset' resets to",
     "",
     "TABLE SETUP",
     "  hands 1-3                      Simultaneous hands (single deck: 1-2, locked for the shoe once dealt)",
@@ -58,10 +58,10 @@ HELP_LINES = [
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
     "  newsession                     Reset shoe + session stats, bankroll untouched (RETURN confirms)",
-    "  hardreset                      Reset lifetime stats, session stats, shoe + bankroll (type 'confirm')",
     "",
     "DATA & BACKUPS  (history database: ~/.cs-blackjack/blackjack.db)",
     "  export [hands|sessions|shoes|stats|all] [csv|json]   Write history to ~/.cs-blackjack/exports/",
+    "  export mysql                   Write the whole history database as a MySQL .sql script",
     "  backup                         Snapshot the history database + saved game state",
     "  backups                        List saved backups",
     "  restore <name>                 Replace ALL current data with a backup (type 'confirm')",
@@ -95,7 +95,7 @@ _SIDEBET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_bu
 def handle_command(raw: str, session: "GameSession", round_in_progress: bool = False) -> str:
     """Parse and apply a settings/betting command, returning a feedback string.
 
-    Note: the 'confirm' response to a pending hardreset is intercepted
+    Note: the 'confirm' response to a pending restore is intercepted
     earlier, in ui.py's _dispatch_command -- it needs stdscr (to blink the
     new shoe) and the current round (to refuse mid-round), neither of
     which this presentation-agnostic layer has access to. Likewise
@@ -266,7 +266,7 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
             if amt < 0:
                 raise CommandError("default bankroll cannot be negative")
             rules.default_bankroll = amt
-            return f"Default starting bankroll set to ${amt:,.2f} (applies on 'bank reset' or 'hardreset')"
+            return f"Default starting bankroll set to ${amt:,.2f} (applies on 'bank reset')"
         if rest and rest[0] == "reset":
             session.pending_confirmation = "bank_reset"
             return "Press RETURN to reset your bankroll to its default (any other key cancels)."
@@ -303,14 +303,6 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
     if head == "newsession":
         session.pending_confirmation = "newsession"
         return "Press RETURN to reset the shoe AND session stats (any other key cancels)."
-
-    if head == "hardreset":
-        session.pending_hard_reset = True
-        return (
-            "Type 'confirm' to permanently reset ALL lifetime stats to zero, "
-            "start a new session (shoe + session stats), and reset the bankroll "
-            "to its default (anything else cancels)."
-        )
 
     if head == "export":
         return _export_command(rest, session)
@@ -358,9 +350,13 @@ def _require_history(session: "GameSession"):
 def _export_command(rest: List[str], session: "GameSession") -> str:
     """'export [hands|sessions|shoes|stats|all] [csv|json]' -- either
     argument may be omitted (defaults: all, csv) and they can come in
-    either order."""
-    usage = "Usage: export [hands|sessions|shoes|stats|all] [csv|json]"
+    either order -- or 'export mysql' for the whole database as a MySQL
+    script."""
+    usage = "Usage: export [hands|sessions|shoes|stats|all] [csv|json]   or   export mysql"
     what, fmt = "all", "csv"
+    if rest == ["mysql"]:
+        out = _require_history(session).export_mysql()
+        return f"Exported the database for MySQL to {_tilde(out)}"
     if len(rest) > 2:
         raise CommandError(usage)
     for token in rest:

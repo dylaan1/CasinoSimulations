@@ -64,7 +64,7 @@ class Rules:
     table_min: float = 0.0  # min main wager on a single hand (0 = no minimum)
     table_max: float = 5000.0  # max main wager on a single hand
     default_bet: float = 10.0
-    default_bankroll: float = 10_000.0  # bankroll 'bank reset' (or hardreset) resets to
+    default_bankroll: float = 10_000.0  # bankroll 'bank reset' resets to
     num_hands: int = 1  # simultaneous hands to play, 1-3
 
     power_poker: SideBetRules = field(default_factory=SideBetRules)

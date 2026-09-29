@@ -305,9 +305,9 @@ adds a sound beyond the ordinary card-deal ones.
 
 **Bankroll and statistics**
 
-- A **lifetime** panel and a **session** panel, side by side, both saved to
-  disk automatically — the Main UI shows both in full (2 sub-columns
-  apiece); the full-screen `stats` command shows the same two tables, plus
+- A **lifetime** panel and a **session** panel, side by side, both read
+  straight from the history database (see **Data storage**) — the Main UI
+  shows both in full (2 sub-columns apiece); the full-screen `stats` command shows the same two tables, plus
   a dedicated payout/occurrence table per side bet underneath them (see
   below). Every table follows the same convention throughout: names
   left-aligned, values right-aligned, columns fixed-width so nothing
@@ -342,9 +342,14 @@ adds a sound beyond the ordinary card-deal ones.
   well before that. Without this, those numbers ticking up early would be
   its own tell, well before the deal animation or a settlement banner
   actually shows you the result.
-- `hardreset` (type `confirm`) wipes the lifetime panel back to zero *and*
-  resets the bankroll to its default, alongside the usual shoe/session
-  reset.
+- **Every number on both panels is computed from the history database** —
+  nothing in the game keeps its own running totals. Lifetime means
+  everything in the database (plus any lifetime numbers from before the
+  database existed, imported once — see **Data storage**); session means the
+  current session's hands. There is no command to zero the lifetime numbers,
+  because that would mean erasing data: to start over with a clean slate,
+  launch with a different database file (`python3 -m cs-blackjack --db
+  ~/fresh.db`) and the old one stays exactly as it is.
 - **Net Return**: a running "Net Return: $X.XX" figure on the red status
   bar, directly below Bankroll, tracking this round's cumulative result
   across all three spots' main wagers, side bets, and insurance combined.
@@ -362,6 +367,8 @@ adds a sound beyond the ordinary card-deal ones.
   your bankroll.
 - `bank reset` (RETURN confirms) resets just the bankroll to its default,
   independent of the shoe or any stats.
+- `newsession` ends the current session in the history log and starts a new
+  one, so the session panel starts over; nothing is ever erased.
 
 **Data keeping**
 
@@ -373,21 +380,26 @@ adds a sound beyond the ordinary card-deal ones.
 - **Every shuffle is recorded exactly**: each shoe gets a `shoe_id`, its
   deck count, its penetration setting, and its full card order as run-together
   tokens (`K♣T♦3♠…`), so any past hand can be replayed against the cards
-  that were actually coming.
+  that were actually coming. The order is held only in memory while the shoe
+  is in play — the database gets each round's dealt cards as the round ends,
+  and the never-dealt remainder, marked off after a `|`, when the shoe is
+  retired (including when you quit, press Ctrl-C, or close the window) — so
+  it can't be peeked at mid-shoe.
 - **New tracked metrics**, kept per session and all-time: peak and lowest
   bankroll, max drawdown, longest win/loss streaks, biggest hand win and
   loss, and results by hand type (hard / soft / pairs / blackjacks /
   doubled / split), shown in a new block at the bottom of the `stats`
   screen. The Main UI's panels are unchanged.
-- **`export`, `backup`, `backups`, `restore`** — CSV/JSON export, and
-  validated snapshots that can be restored (with an automatic safety backup
-  first).
+- **`export`, `backup`, `backups`, `restore`** — CSV/JSON export, an
+  `export mysql` script that recreates the whole database in MySQL/MariaDB,
+  and validated snapshots that can be restored (with an automatic safety
+  backup first). Pandas reads the database directly — see **Analyzing with
+  pandas**.
 - **Safer saves**: atomic writes, a schema version, and a corrupt save file is
   set aside instead of overwritten.
 - A round you quit in the middle of (or Ctrl-C out of) is logged with its
   unsettled hands as `abandoned`, wager forfeited — matching what your saved
-  bankroll actually does. `hardreset` zeroes the lifetime counters but never
-  the history log.
+  bankroll actually does. Nothing in the game erases the history log.
 
 **Mouse or keyboard**
 
@@ -456,11 +468,22 @@ Run it as a module from the repository root:
 python3 -m cs-blackjack
 ```
 
-The game maximizes your terminal window on launch. Your bankroll, lifetime
-and session stats, and table rules are saved to `~/.cs-blackjack_state.json`
-and reloaded automatically the next time you launch. Every hand, session,
-and shoe is also logged to a SQLite database at
-`~/.cs-blackjack/blackjack.db` — see **Data storage** below.
+The game maximizes your terminal window on launch. Your bankroll, wagers,
+and table rules are saved to `~/.cs-blackjack_state.json` and reloaded
+automatically the next time you launch. Every hand, session, and shoe is
+logged to a SQLite database at `~/.cs-blackjack/blackjack.db`, and all of
+the game's lifetime and session stats are computed from it — see **Data
+storage** below.
+
+To start with a clean slate without deleting anything, point the game at a
+different database file (it's created if it doesn't exist):
+
+```bash
+python3 -m cs-blackjack --db ~/blackjack-2027.db
+```
+
+The original database is left exactly as it was, and you can go back to it
+any time by launching without `--db`.
 
 ### Playing
 
@@ -545,14 +568,14 @@ like everything else, so they carry over between sessions.
 | Command | Effect |
 |---|---|
 | `newshoe` | Reshuffle a fresh shoe (RETURN confirms) |
-| `newsession` | Reset shoe + session stats, bankroll untouched (RETURN confirms) |
-| `hardreset` | Reset lifetime stats + session stats + shoe + bankroll (type `confirm`); the history database is kept |
+| `newsession` | Start a new session on a new shoe (session panel starts over, bankroll untouched; RETURN confirms) |
 
 **Data & backups** (see **Data storage** below)
 
 | Command | Effect |
 |---|---|
 | `export [hands\|sessions\|shoes\|stats\|all] [csv\|json]` | Write history (or the stats counters) to `~/.cs-blackjack/exports/` |
+| `export mysql` | Write the whole database as a MySQL/MariaDB `.sql` script to `~/.cs-blackjack/exports/` |
 | `backup` | Snapshot the history database + live state to `~/.cs-blackjack/backups/` |
 | `backups` | List saved backups |
 | `restore <name>` | Replace all current data with a backup (type `confirm`; a safety backup is taken first) |
@@ -601,14 +624,14 @@ table, so there's no separate command to look them up.
 | `dealer.py` | Dealer drawing logic (S17/H17) |
 | `sidebets.py` | Power Poker / Star 21 (standard + double-deck) / Dealer Buster evaluators and their deck-count gating |
 | `rules.py` | `Rules`/`SideBetRules` — every configurable table rule, with JSON (de)serialization |
-| `stats.py` | Lifetime and session statistics tracking |
+| `stats.py` | `Stats` — the lifetime/session numbers the panels show (a read-only snapshot of what the database says) |
 | `persist.py` | Load/save the live game state to `~/.cs-blackjack_state.json` (atomic writes, schema version, corrupt-file quarantine) |
-| `history.py` | The SQLite history log (`sessions`/`shoes`/`hands` in `~/.cs-blackjack/blackjack.db`), plus `export`, `backup`, and `restore` |
+| `history.py` | The SQLite history log (`sessions`/`shoes`/`hands` in `~/.cs-blackjack/blackjack.db`), every stat query, plus `export` (CSV/JSON/MySQL), `backup`, and `restore` |
 | `commands.py` | Parses and applies every CLI command |
 | `engine.py` | `GameSession`/`Round` — the full round state machine: dealing order, prelim prompts, player actions, settlement timing |
 | `ui.py` | The `curses` TUI: layout, rendering, animation, input handling |
 | `sound.py` | Fire-and-forget sound-effect playback (see `sounds/README.md`) |
-| `__main__.py` | `python3 -m cs-blackjack` entry point |
+| `__main__.py` | `python3 -m cs-blackjack` entry point (`--db FILE` picks a different history database) |
 
 ### Data storage
 
@@ -616,13 +639,28 @@ The game keeps two kinds of data:
 
 | Where | What |
 |---|---|
-| `~/.cs-blackjack_state.json` | The *live* game state: bankroll, table rules, side-bet payouts, wagers, and the lifetime/session counters. Written after every round and on quit. |
-| `~/.cs-blackjack/blackjack.db` | The *history log*: a SQLite database with every hand, session, and shoe ever played. Append-only — nothing in the game (not even `hardreset`) erases it. |
+| `~/.cs-blackjack_state.json` | The *live* game state: bankroll, table rules, side-bet payouts, and wagers. Written after every round and on quit. |
+| `~/.cs-blackjack/blackjack.db` | The *history log*: a SQLite database with every hand, session, and shoe ever played, and the source of every stat the game displays. Append-only — nothing in the game erases it. |
 | `~/.cs-blackjack/exports/` | Files written by `export`. |
 | `~/.cs-blackjack/backups/` | Snapshots made by `backup` (and the automatic safety backup before a `restore`). |
 
 Delete `~/.cs-blackjack_state.json` to reset the live state back to
-defaults; delete `~/.cs-blackjack/` to erase the history.
+defaults. To start over with fresh stats, launch with `--db <file>` (see
+**Launch**) rather than deleting anything; deleting `~/.cs-blackjack/` erases
+the history for good.
+
+**Stats come from the database.** The lifetime and session panels are
+computed from the `hands`, `sessions` and `shoes` tables after every round.
+Hand tallies count settled hands; the money figures also include the
+forfeited wager of a hand still unsettled when the game was quit. Before the
+database existed, the game counted lifetime numbers itself and kept them in
+the state file: the first launch that finds them imports them into the
+database's `imported_stats` table (only the part the database doesn't
+already hold), and from then on the state file no longer carries any stats.
+Until that import succeeds they stay in the state file untouched, so they can
+never be lost. (They go into the first database the game opens after the
+upgrade — if that's a fresh `--db` file rather than your usual one, that's
+where they land.)
 
 **Safer saves.** The state file is written to a temporary file and renamed
 into place, so a crash or full disk mid-save can't leave a truncated file,
@@ -646,9 +684,9 @@ sqlite3 -header -column ~/.cs-blackjack/blackjack.db \
 ```
 
 > It's a **SQLite** database, not a MySQL server, so a MySQL client such as
-> MySQL Workbench can't open the file directly. The schema sticks to plain
-> types and avoids MySQL reserved words, so the tables move to MySQL with
-> little change if you export them (`export` → CSV → `LOAD DATA`).
+> MySQL Workbench can't open the file directly. To use it from MySQL, run
+> `export mysql` in the game (see **Using it from MySQL** below) — it writes
+> a script that recreates every table, row and view.
 
 Conventions: timestamps are UTC ISO-8601 text (`2026-09-29T15:04:05Z`; use
 `datetime(col, 'localtime')` in SQLite to convert); booleans are `0`/`1`;
@@ -658,14 +696,13 @@ tokens run together, e.g. `K♣T♦3♠`, so it splits cleanly every two
 characters.
 
 **`sessions`** — one row per session. A session runs from launch (or from
-`newsession`/`hardreset`) until the next of those or quit. If the game is
-killed rather than quit, the leftover session is closed as `abandoned` the
-next time it launches. The row is updated after every round, so it's always
-current.
+`newsession`) until the next of those or quit. If the game is killed rather
+than quit, the leftover session is closed as `abandoned` the next time it
+launches. The row is updated after every round, so it's always current.
 
 | Columns | Meaning |
 |---|---|
-| `session_id`, `started_at`, `ended_at`, `end_reason` | `end_reason`: `quit`, `newsession`, `hardreset`, or `abandoned`; `ended_at` is `NULL` while running |
+| `session_id`, `started_at`, `ended_at`, `end_reason` | `end_reason`: `quit`, `newsession`, `restore`, or `abandoned` (databases from older versions of the game may also contain `hardreset`); `ended_at` is `NULL` while running |
 | `starting_bankroll`, `ending_bankroll`, `peak_bankroll`, `lowest_bankroll` | Bankroll as observed at round boundaries |
 | `max_drawdown` | Largest peak-to-trough fall in cumulative session P/L (a `bank add` can't distort it) |
 | `rounds_played`, `hands_played`, `hands_won`, `hands_lost`, `hands_pushed`, `hands_surrendered` | Tallies (a round cut off by quitting isn't counted as played) |
@@ -678,14 +715,22 @@ current.
 | Columns | Meaning |
 |---|---|
 | `shoe_id`, `session_id` | The shoe's ID, and the session it was cut in |
-| `cut_at`, `retired_at`, `cut_reason` | `cut_reason`: `start`, `penetration` (cut card reached), `newshoe`, `newsession`, `hardreset`, `restore` |
+| `cut_at`, `retired_at`, `cut_reason` | `cut_reason`: `start`, `penetration` (cut card reached), `newshoe`, `newsession`, `restore` (older databases may also contain `hardreset`) |
 | `num_decks`, `penetration`, `total_cards`, `cards_dealt` | Deck count; the penetration in effect for the shoe (with `deckpen rand`, the value that was rolled; a single-deck shoe records its capped value, 0.75 or 0.60); cards actually dealt from it |
 | `blackjack_payout`, `hit_soft_17`, `rules_json` | Table rules as of the cut, including every side-bet payout |
-| `card_order` | **The exact order of the whole shuffle, first card dealt first** — e.g. `K♣T♦3♠…` (624 characters for six decks) |
+| `card_order` | **The exact order of the whole shuffle, first card dealt first**, with the never-dealt cards marked off after a `\|` — e.g. `K♣T♦3♠\|7♥A♠…` reads *dealt* `\|` *never dealt* (624 characters plus the `\|` for six decks) |
 
-The order is written when the shoe is cut, so the shuffle is readable in
-the file before its cards are dealt — don't peek mid-shoe if you're
-practicing counting.
+**How `card_order` gets written.** The shuffle exists only in the game's
+memory while the shoe is in play, so the file never holds cards that haven't
+been dealt yet — no peeking mid-shoe. After each round, the cards dealt so
+far are written (no `|` yet, which means "still in play"). When the shoe is
+retired — a reshuffle, `newshoe`, `newsession`, `quit`, Ctrl-C, or closing the
+terminal window (SIGHUP/SIGTERM are handled the same way) — the rest of the
+shuffle is appended after a `|`, so every retired shoe shows exactly which
+cards were dealt and which never were. Split it in SQL or pandas with
+`substr`/`split('|')`. The one thing that can still lose a tail is the
+process being killed outright (`kill -9`, power loss): that shoe keeps its
+dealt cards but has no `|`.
 
 **`hands`** — one row per player hand (a spot that splits logs one row per
 resulting hand; `round_id` groups the hands dealt together, and
@@ -722,12 +767,15 @@ by `initial_bet`). For example, results by bet size:
 SELECT * FROM bet_size_summary ORDER BY initial_bet;
 ```
 
-or your win rate by true count:
+or your win rate by true count (`true_count_before` is already stored in exact
+half-steps, so it groups cleanly with no casting — and this exact query gives
+the same answer in SQLite and MySQL):
 
 ```sql
-SELECT CAST(true_count_before AS INTEGER) AS tc, COUNT(*) AS hands,
+SELECT true_count_before AS tc, COUNT(*) AS hands,
        ROUND(SUM(main_pl) / SUM(final_bet) * 100, 2) AS ev_pct
-FROM hands WHERE outcome <> 'abandoned' GROUP BY tc ORDER BY tc;
+FROM hands WHERE outcome <> 'abandoned'
+GROUP BY true_count_before ORDER BY true_count_before;
 ```
 
 #### Export, backup, and restore
@@ -736,6 +784,8 @@ FROM hands WHERE outcome <> 'abandoned' GROUP BY tc ORDER BY tc;
   `~/.cs-blackjack/exports/<table>-<timestamp>.<csv|json>` (default: all
   three history tables as CSV). `export stats` writes the lifetime/session
   counters shown on the `stats` screen.
+- **`export mysql`** — writes `~/.cs-blackjack/exports/mysql-<timestamp>.sql`,
+  the whole database as a MySQL/MariaDB script (see **Using it from MySQL**).
 - **`backup`** — saves a consistent snapshot of the history database plus the
   live state to `~/.cs-blackjack/backups/<timestamp>/`. Not available in the
   middle of a round.
@@ -746,3 +796,101 @@ FROM hands WHERE outcome <> 'abandoned' GROUP BY tc ORDER BY tc;
   `<timestamp>-pre-restore` safety backup of what you're replacing is taken
   before anything is touched — so a restore can itself be undone with
   another `restore`.
+
+#### Analyzing with pandas
+
+pandas reads the database directly — no export step and no extra packages
+beyond pandas itself. Reading while the game is running is fine (open it
+read-only with `sqlite3.connect("file:<path>?mode=ro", uri=True)` if you
+want to be sure you can't change anything). If another program does hold the
+database when a round ends — a long query, or a GUI tool left with an
+uncommitted edit — the game waits up to two seconds, then keeps that round
+queued (the message line and the `stats` screen say so) and writes it, in
+order, along with the next round once the database is free; when you quit it
+tries again before giving up. Nothing is dropped, but closing analysis tools
+or working from an `export`/`backup` keeps things simple:
+
+```python
+from pathlib import Path
+import sqlite3
+import pandas as pd
+
+con = sqlite3.connect(Path.home() / ".cs-blackjack" / "blackjack.db")
+
+hands    = pd.read_sql_query("SELECT * FROM hands",    con, parse_dates=["played_at"])
+sessions = pd.read_sql_query("SELECT * FROM sessions", con, parse_dates=["started_at", "ended_at"])
+shoes    = pd.read_sql_query("SELECT * FROM shoes",    con, parse_dates=["cut_at", "retired_at"])
+
+# Timestamps come back as UTC; convert to your own time zone if you like:
+hands["played_at"] = hands["played_at"].dt.tz_convert("America/Los_Angeles")
+```
+
+Flags (`doubled`, `is_split`, …) load as `0`/`1` integers — add `.astype(bool)`
+if you'd rather have booleans. A few things worth trying:
+
+```python
+import numpy as np, re
+
+settled = hands[hands["outcome"] != "abandoned"].copy()
+
+# Your edge by true count (buckets of one count):
+settled["tc"] = np.floor(settled["true_count_before"]).astype(int)
+by_tc = settled.groupby("tc").agg(hands=("hand_id", "count"),
+                                  wagered=("final_bet", "sum"), pl=("main_pl", "sum"))
+by_tc["ev_pct"] = by_tc["pl"] / by_tc["wagered"] * 100
+
+# Results by bet size, with the average count you bet it at:
+by_bet = settled.groupby("initial_bet").agg(hands=("hand_id", "count"),
+                                            pl=("main_pl", "sum"),
+                                            avg_tc=("true_count_before", "mean"))
+
+# Bankroll after every round:
+curve = hands.groupby("round_id").agg(played_at=("played_at", "first"),
+                                      bankroll=("bankroll_after", "first"))
+
+# Card strings are two characters per card, so re.findall splits them:
+hands["player_cards"].map(lambda c: re.findall(r".{2}", c))
+
+# Each shoe's dealt cards vs the cards that were never dealt (a shoe still in
+# play has no "|" yet, so its undealt part comes back empty):
+parts = shoes["card_order"].str.split("|", n=1, expand=True)
+shoes["dealt"]   = parts[0].map(lambda o: re.findall(r".{2}", o))
+shoes["undealt"] = parts[1].map(lambda o: re.findall(r".{2}", o) if isinstance(o, str) else None)
+
+# Join hands to the shoe they were dealt from:
+hands.merge(shoes[["shoe_id", "num_decks", "penetration"]], on="shoe_id")
+
+# The summary views load like any table:
+pd.read_sql_query("SELECT * FROM hand_type_summary", con)
+```
+
+#### Using it from MySQL
+
+SQLite files can't be opened by a MySQL server or MySQL Workbench directly, so
+`export mysql` writes a script that recreates the whole database — every table,
+every row, the two views, and the foreign keys and indexes — in MySQL or
+MariaDB. Load it into an **empty schema you've chosen** (the script drops and
+recreates these tables, so don't point it at a schema holding anything else
+under those names):
+
+```bash
+mysql -u root -p -e "CREATE DATABASE blackjack CHARACTER SET utf8mb4"
+mysql -u root -p blackjack < ~/.cs-blackjack/exports/mysql-20260929-131943.sql
+```
+
+or, in MySQL Workbench: pick the schema, then **Server → Data Import → Import
+from Self-Contained File**. The script is safe to re-run; it rebuilds the tables
+from the file each time, so re-export and re-import whenever you want the
+MySQL copy brought up to date (it's a snapshot, not a live sync).
+
+Things to know on the MySQL side:
+
+- Timestamps become `DATETIME` columns holding UTC; use
+  `CONVERT_TZ(played_at, '+00:00', 'America/Los_Angeles')` (or `'-07:00'`) to
+  see local time. The card glyphs (`♠♥♦♣`) need the `utf8mb4` character set,
+  which the script sets for the session and for every table.
+- `CAST(x AS SIGNED)` **rounds** in MySQL where SQLite's `CAST(x AS INTEGER)`
+  **truncates**, so don't bucket the count by casting — group by
+  `true_count_before` itself (as above), or use `FLOOR()`.
+- The script's table definitions are generated from the live SQLite schema, so
+  they track any columns added in later versions of the game.
