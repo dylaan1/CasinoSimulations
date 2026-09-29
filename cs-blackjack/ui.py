@@ -21,7 +21,7 @@ from .engine import (
 )
 from .hand import Hand
 from .history import HistoryDB
-from .rules import format_blackjack_payout
+from .rules import SINGLE_DECK_MAX_HANDS, format_blackjack_payout, single_deck_penetration_cap
 from .sidebets import (
     BUSTER_CATEGORIES,
     POWER_POKER_CATEGORIES,
@@ -1519,6 +1519,19 @@ def render_gamerules_screen(stdscr, session: GameSession) -> None:
         lines.append(f"  {label:<16} {state}")
     if num_decks == 1:
         lines.append("  (single-deck Buster: 8+ card bust pays 500:1)")
+        locked = (
+            f"locked at {session.shoe_hands} until the next shuffle"
+            if session.shoe_hands is not None
+            else "can still be changed until the first hand of this shoe is dealt"
+        )
+        lines += [
+            "",
+            "SINGLE-DECK LIMITS",
+            f"  Hands per Round:     {r.num_hands}  ({locked})",
+            f"  Max Hands:           {SINGLE_DECK_MAX_HANDS}",
+            f"  Cut Card Depth:      {single_deck_penetration_cap(1):.0%} with 1 hand, "
+            f"{single_deck_penetration_cap(2):.0%} with 2",
+        ]
     _render_overlay_lines(stdscr, "cs-blackjack -- Game Rules", lines)
 
 
@@ -2012,6 +2025,7 @@ def _main(stdscr) -> None:
             return
         message = ""
         amount = float(bet_edit_buffer)
+        previous_wager = session.wagers[bet_col]
         if bet_row == 0:
             # Main wager only -- half-dollar increments, so a typed "25.3"
             # or "25.7" both land on the nearest half dollar rather than
@@ -2021,16 +2035,21 @@ def _main(stdscr) -> None:
             if not err:
                 # Funding (or clearing) a spot via the grid is, on its own,
                 # enough to include (or exclude) it in the deal -- no separate
-                # 'hands N' step required to actually get it dealt.
+                # 'hands N' step required to actually get it dealt. That goes
+                # through the same hand-count check as 'hands N' (a single-
+                # deck shoe caps and locks it), and a refused change also
+                # leaves the wager as it was.
                 if amount > 0:
-                    session.rules.num_hands = max(session.rules.num_hands, bet_col + 1)
+                    err = session.try_set_num_hands(max(session.rules.num_hands, bet_col + 1))
                 elif bet_col + 1 == session.rules.num_hands:
                     shrink_to = 1
                     for j in range(bet_col - 1, -1, -1):
                         if session.wagers[j] > 0:
                             shrink_to = j + 1
                             break
-                    session.rules.num_hands = shrink_to
+                    err = session.try_set_num_hands(shrink_to)
+                if err:
+                    session.wagers[bet_col] = previous_wager
         else:
             err = session.try_set_side_bet_wager(bet_col, ROW_KEYS[bet_row], amount)
         if err:

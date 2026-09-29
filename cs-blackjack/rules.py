@@ -9,6 +9,20 @@ from .sidebets import default_payouts
 # time a fresh shoe is actually cut -- see GameSession._roll_penetration.
 RANDOM_PENETRATION_RANGE = (0.65, 0.80)
 
+# A single-deck shoe is small enough for a round to run out of cards
+# part-way through (the dealer's hand included), so it's held to tighter
+# limits than a multi-deck one: at most SINGLE_DECK_MAX_HANDS hands, the
+# same number every round of that shoe (see GameSession.try_set_num_hands),
+# and a cut card no deeper than this -- by number of hands -- which leaves
+# 13 (one hand) or about 21 (two hands) cards behind the cut card for the
+# last round to finish with.
+SINGLE_DECK_MAX_HANDS = 2
+SINGLE_DECK_MAX_PENETRATION = {1: 0.75, 2: 0.60}
+
+
+def single_deck_penetration_cap(hands: int) -> float:
+    return SINGLE_DECK_MAX_PENETRATION[min(max(hands, 1), SINGLE_DECK_MAX_HANDS)]
+
 
 def format_blackjack_payout(payout: float) -> str:
     return "3:2" if abs(payout - 1.5) < 1e-9 else "6:5"

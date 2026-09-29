@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List
 
 from .history import BACKUP_DIR, EXPORT_DIR, EXPORT_FORMATS, EXPORT_TABLES, HistoryError
-from .rules import RANDOM_PENETRATION_RANGE
+from .rules import RANDOM_PENETRATION_RANGE, SINGLE_DECK_MAX_HANDS, single_deck_penetration_cap
 from .sidebets import side_bet_allowed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -24,7 +24,7 @@ HELP_LINES = [
     "  bj32  /  bj65                  Blackjack pays 3:2 or 6:5 (next shuffle)",
     "  surr late/early/off            Surrender mode",
     "  h17  /  s17                    Dealer hits / stands on soft 17 (next shuffle)",
-    "  decks N                        Number of decks, 1-12 (next shuffle)",
+    "  decks N                        Number of decks, 1-12 (next shuffle); a single deck allows 2 hands max",
     "  deckpen 0.NN                   Deck penetration before reshuffle (next shuffle)",
     "  deckpen rand                   Random penetration (0.65-0.80) re-rolled on every new shoe",
     "  splitmax N                     Max hands from splitting non-ace pairs",
@@ -40,7 +40,7 @@ HELP_LINES = [
     "  bank default N                 Set the bankroll 'bank reset'/hardreset reset to",
     "",
     "TABLE SETUP",
-    "  hands 1-3                      Simultaneous hands to play",
+    "  hands 1-3                      Simultaneous hands (single deck: 1-2, locked for the shoe once dealt)",
     "",
     "SIDE BETS",
     "  powerpoker on/off [minbet N] [maxbet N]   Requires 3+ decks in the shoe",
@@ -195,7 +195,14 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         if not (1 <= n <= 12):
             raise CommandError("decks must be between 1 and 12")
         rules.num_decks = n
-        return f"Shoe will use {n} deck(s) starting next shuffle"
+        note = ""
+        if n == 1:
+            note = (
+                f" (single-deck limits: at most {SINGLE_DECK_MAX_HANDS} hands, the same every round of the shoe; "
+                f"cut card no deeper than {single_deck_penetration_cap(1):.0%} with 1 hand, "
+                f"{single_deck_penetration_cap(2):.0%} with 2)"
+            )
+        return f"Shoe will use {n} deck(s) starting next shuffle{note}"
 
     if head == "deckpen":
         arg = _require(rest, 0, "deckpen 0.NN or deckpen rand")
@@ -208,7 +215,13 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
             raise CommandError("deckpen must be between 0.1 and 1.0")
         rules.random_penetration = False
         rules.penetration = p
-        return f"Deck penetration set to {p:.2f} (takes effect next shuffle)"
+        note = ""
+        if rules.num_decks == 1 and p > single_deck_penetration_cap(1):
+            note = (
+                f"; single-deck shoes are capped at {single_deck_penetration_cap(1):.2f} "
+                f"(1 hand) / {single_deck_penetration_cap(2):.2f} (2 hands)"
+            )
+        return f"Deck penetration set to {p:.2f} (takes effect next shuffle{note})"
 
     if head == "splitmax":
         n = _parse_int(_require(rest, 0, "splitmax N"), "splitmax")
@@ -259,8 +272,16 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
         n = _parse_int(_require(rest, 0, "hands 1-3"), "hands")
         if not (1 <= n <= 3):
             raise CommandError("hands must be 1, 2, or 3")
-        rules.num_hands = n
-        return f"Playing {n} hand(s) per round"
+        err = session.try_set_num_hands(n)
+        if err:
+            raise CommandError(err)
+        note = ""
+        if session.shoe.num_decks == 1:
+            note = (
+                f" -- single-deck shoe: locked at {n} once the first hand is dealt, "
+                f"cut card at {single_deck_penetration_cap(n):.0%}"
+            )
+        return f"Playing {n} hand(s) per round{note}"
 
     if head in ("powerpoker", "star21", "buster"):
         if rest and rest[0] not in ("on", "off"):

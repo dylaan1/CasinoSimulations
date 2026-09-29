@@ -62,7 +62,8 @@ required)
   a reshuffle) — either a fixed value (`deckpen 0.NN`) or randomized
   (`deckpen rand`), which re-rolls somewhere in 0.65–0.80 every time a
   fresh shoe is actually cut, so the cut isn't the exact same depth every
-  single shoe
+  single shoe. A single-deck shoe is cut no deeper than 75% (60% with two
+  hands) — see **Single-deck limits** below
 - Double after split (DAS)
 - Resplit aces (RSA), with a configurable max resulting hands (2–4), and an
   optional face-down deal for split-ace cards (only while RSA itself is off)
@@ -90,7 +91,8 @@ double options, side bets) applies immediately.
 
 **Multi-hand play & splits**
 
-- Bet and play 1–3 simultaneous hands per round.
+- Bet and play 1–3 simultaneous hands per round (1–2 on a single-deck
+  shoe — see **Single-deck limits** below).
 - Splits (up to the configured max, including resplit aces) are tracked
   independently per hand, each playing out in turn in table order.
 - A split spot's settlement banner tallies its hands in words — e.g.
@@ -106,6 +108,38 @@ double options, side bets) applies immediately.
   own equal slice of the spot's column, its value directly below its own
   cards — never collapsed into the above-the-cards chip row non-ace splits
   use.
+
+**Single-deck limits**
+
+A single deck is small enough that a round — the dealer's hand included —
+can run out of cards part-way through, so a single-deck shoe is held to
+tighter limits than a multi-deck one:
+
+- **At most 2 hands** per round. `hands 3` is refused, and so is funding
+  Hand #3 in the wager grid.
+- **The same number of hands every round of the shoe.** Pick 1 or 2 before
+  the first hand of the shoe is dealt; once it's dealt, the count is locked
+  until the next shuffle, and `hands N` — or funding or clearing a hand's
+  wager in the grid in a way that would change the count — is refused with
+  a message saying so. Until that first deal you can still change it
+  freely, and the shoe's cut card follows.
+- **A shallower cut card**: no deeper than 75% of the shoe with one hand and
+  60% with two, which leaves at least 13 (one hand) or about 21 (two hands)
+  cards behind the cut card for the last round to finish with. Whatever
+  `deckpen` says — including `deckpen rand` — the shoe is cut no deeper than
+  that. The blue rules-summary line and `gamerules` show the depth actually
+  in effect, and the history log records it.
+- Switching to one deck from a game with 3 hands set (`decks 1`, then the
+  next shuffle) cuts the hands back to 2 automatically. Multi-deck shoes are
+  unaffected.
+
+These limits come from simulation. Under the old rules, ordinary
+basic-strategy play on a 1-deck, 3-hand game ran the shoe dry about once
+per 15,000 rounds, and random play far more often; with these limits there
+were none in 200,000 rounds of basic-strategy play and 200,000 rounds of
+random play. One thing they don't rule out: a player who deliberately
+splits every pair into four hands and hits every hand can still, rarely,
+run a single-deck shoe dry.
 
 **Player actions**
 
@@ -471,8 +505,8 @@ and shoe is also logged to a SQLite database at
 | `bj32` / `bj65` | Blackjack pays 3:2 or 6:5 (next shuffle) |
 | `surr late/early/off` | Surrender mode |
 | `h17` / `s17` | Dealer hits / stands on soft 17 (next shuffle) |
-| `decks N` | Number of decks, 1–12 (next shuffle) |
-| `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle) |
+| `decks N` | Number of decks, 1–12 (next shuffle); a single deck allows 2 hands max |
+| `deckpen 0.NN` | Deck penetration before reshuffle (next shuffle); a single deck is capped at 0.75 (1 hand) / 0.60 (2 hands) |
 | `deckpen rand` | Random penetration, 0.65–0.80, re-rolled on every new shoe (next shuffle) |
 | `splitmax N` | Max hands from splitting non-ace pairs |
 | `tablemin N` / `tablemax N` | Table wager limits |
@@ -493,7 +527,7 @@ and shoe is also logged to a SQLite database at
 
 | Command | Effect |
 |---|---|
-| `hands 1-3` | Simultaneous hands to play |
+| `hands 1-3` | Simultaneous hands to play (single deck: 1–2, locked for the shoe once dealt) |
 
 **Side bets**
 
@@ -651,7 +685,7 @@ current.
 |---|---|
 | `shoe_id`, `session_id` | The shoe's ID, and the session it was cut in |
 | `cut_at`, `retired_at`, `cut_reason` | `cut_reason`: `start`, `penetration` (cut card reached), `newshoe`, `newsession`, `hardreset`, `restore` |
-| `num_decks`, `penetration`, `total_cards`, `cards_dealt` | Deck count; the penetration setting the shoe was cut with (with `deckpen rand`, the value that was rolled); cards actually dealt from it |
+| `num_decks`, `penetration`, `total_cards`, `cards_dealt` | Deck count; the penetration in effect for the shoe (with `deckpen rand`, the value that was rolled; a single-deck shoe records its capped value, 0.75 or 0.60); cards actually dealt from it |
 | `blackjack_payout`, `hit_soft_17`, `rules_json` | Table rules as of the cut, including every side-bet payout |
 | `card_order` | **The exact order of the whole shuffle, first card dealt first** — e.g. `K♣T♦3♠…` (624 characters for six decks) |
 
