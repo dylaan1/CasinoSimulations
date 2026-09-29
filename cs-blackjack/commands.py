@@ -37,7 +37,7 @@ HELP_LINES = [
     "  bank N                         Set bankroll to N",
     "  bank add N                     Add N to bankroll",
     "  bank reset                     Reset bankroll to its default (RETURN confirms)",
-    "  bank default N                 Set the bankroll 'newsession'/hardreset reset to",
+    "  bank default N                 Set the bankroll 'bank reset'/hardreset reset to",
     "",
     "TABLE SETUP",
     "  hands 1-3                      Simultaneous hands to play",
@@ -52,8 +52,8 @@ HELP_LINES = [
     "",
     "SHOE / SESSION",
     "  newshoe                        Reshuffle a fresh shoe (RETURN confirms)",
-    "  newsession                     Reset shoe + session stats + bankroll (RETURN confirms)",
-    "  hardreset                      Reset lifetime stats + newsession (type 'confirm')",
+    "  newsession                     Reset shoe + session stats, bankroll untouched (RETURN confirms)",
+    "  hardreset                      Reset lifetime stats, session stats, shoe + bankroll (type 'confirm')",
     "",
     "DATA & BACKUPS  (history database: ~/.cs-blackjack/blackjack.db)",
     "  export [hands|sessions|shoes|stats|all] [csv|json]   Write history to ~/.cs-blackjack/exports/",
@@ -245,7 +245,7 @@ def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progr
             if amt < 0:
                 raise CommandError("default bankroll cannot be negative")
             rules.default_bankroll = amt
-            return f"Default starting bankroll set to ${amt:,.2f} (applies on 'newsession' or 'hardreset')"
+            return f"Default starting bankroll set to ${amt:,.2f} (applies on 'bank reset' or 'hardreset')"
         if rest and rest[0] == "reset":
             session.pending_confirmation = "bank_reset"
             return "Press RETURN to reset your bankroll to its default (any other key cancels)."
