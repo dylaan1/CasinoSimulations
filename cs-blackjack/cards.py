@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, Iterable, List
 import random
 
 SUITS = ["spades", "hearts", "diamonds", "clubs"]
@@ -37,8 +37,21 @@ class Card:
     def short_rank(self) -> str:
         return "T" if self.rank == "10" else self.rank
 
-    def __str__(self) -> str:  # pragma: no cover - convenience only
+    @property
+    def token(self) -> str:
+        """Fixed two-character form ("T♦", "K♣") used wherever a card is
+        stored or exported -- the history database writes card sequences as
+        these tokens run together, so they can be split back apart every
+        two characters."""
         return f"{self.short_rank}{self.glyph}"
+
+    def __str__(self) -> str:  # pragma: no cover - convenience only
+        return self.token
+
+
+def cards_to_string(cards: Iterable[Card]) -> str:
+    """Card tokens run together, e.g. "K♣T♦3♠"."""
+    return "".join(c.token for c in cards)
 
 
 def hilo_value(card: Card) -> int:
@@ -66,6 +79,10 @@ class Shoe:
     num_decks: int
     penetration: float = 0.75
     _cards: List[Card] = field(default_factory=list, init=False)
+    # The whole shuffle in the order it will be dealt (first card dealt
+    # first), frozen when the shoe is shuffled -- _cards above shrinks as
+    # cards are drawn, so this is the only place the full order survives.
+    _initial_order: List[Card] = field(default_factory=list, init=False, repr=False)
     drawn_counts: Dict[str, int] = field(
         default_factory=lambda: {rank: 0 for rank in RANKS}, init=False
     )
@@ -82,9 +99,14 @@ class Shoe:
     def shuffle(self) -> None:
         self._cards = [Card(rank, suit) for rank in RANKS for suit in SUITS] * self.num_decks
         random.shuffle(self._cards)
+        self._initial_order = self._cards[::-1]  # draw() pops from the end, so the end is dealt first
         self.drawn_counts = {rank: 0 for rank in RANKS}
         self.running_count = 0
         self.cards_dealt = 0
+
+    def order_string(self) -> str:
+        """The full shuffle as card tokens in dealing order, e.g. "K♣T♦3♠..."."""
+        return cards_to_string(self._initial_order)
 
     def draw(self) -> Card:
         if not self._cards:

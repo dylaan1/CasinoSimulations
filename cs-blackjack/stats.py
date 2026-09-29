@@ -27,7 +27,8 @@ class Stats:
     double/split tallies, aces- and tens-split counts, Dealer Pulled 21s
     (the dealer hitting to a non-blackjack 21), player/dealer blackjacks
     dealt, shoes played, dealer busts, and the player's current win/loss
-    streak (consecutive hands, push/surrender leave it unchanged).
+    streak (consecutive hands, push/surrender leave it unchanged) along with
+    the longest win and loss streaks reached this session.
     """
 
     # ---- Lifetime ----
@@ -68,6 +69,8 @@ class Stats:
     # it): positive N = an N-hand win streak, negative N = an N-hand losing
     # streak, 0 = no streak yet this session. Displayed as "W2"/"L3"/"-".
     current_streak: int = 0
+    longest_win_streak: int = 0  # best current_streak reached this session
+    longest_loss_streak: int = 0  # worst (as a positive count) current_streak reached this session
     shoes_played: int = 1
 
     session_main_pl: float = 0.0
@@ -87,10 +90,12 @@ class Stats:
             self.player_wins += 1
             self.session_player_wins += 1
             self.current_streak = self.current_streak + 1 if self.current_streak >= 0 else 1
+            self.longest_win_streak = max(self.longest_win_streak, self.current_streak)
         elif outcome == "dealer_win":
             self.dealer_wins += 1
             self.session_dealer_wins += 1
             self.current_streak = self.current_streak - 1 if self.current_streak <= 0 else -1
+            self.longest_loss_streak = max(self.longest_loss_streak, -self.current_streak)
         elif outcome == "push":
             self.pushes += 1
             self.session_pushes += 1
@@ -162,6 +167,8 @@ class Stats:
         self.greg_specials = 0
         self.dealer_busts = 0
         self.current_streak = 0
+        self.longest_win_streak = 0
+        self.longest_loss_streak = 0
         self.shoes_played = 1
         self.session_main_pl = 0.0
         self.session_sidebet_pl = 0.0

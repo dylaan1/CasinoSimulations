@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 from typing import TYPE_CHECKING, List
 
+from .history import BACKUP_DIR, EXPORT_DIR, EXPORT_FORMATS, EXPORT_TABLES, HistoryError
 from .rules import RANDOM_PENETRATION_RANGE
 from .sidebets import side_bet_allowed
 
@@ -53,6 +55,12 @@ HELP_LINES = [
     "  newsession                     Reset shoe + session stats + bankroll (RETURN confirms)",
     "  hardreset                      Reset lifetime stats + newsession (type 'confirm')",
     "",
+    "DATA & BACKUPS  (history database: ~/.cs-blackjack/blackjack.db)",
+    "  export [hands|sessions|shoes|stats|all] [csv|json]   Write history to ~/.cs-blackjack/exports/",
+    "  backup                         Snapshot the history database + saved game state",
+    "  backups                        List saved backups",
+    "  restore <name>                 Replace ALL current data with a backup (type 'confirm')",
+    "",
     "REFERENCE",
     "  betspread                      Show the $10/$25/$100 bet spread reference tables",
     "  (side bet payout odds are shown live in the stats bar below the table)",
@@ -79,13 +87,15 @@ HELP_TEXT = "  |  ".join(line.strip() for line in HELP_LINES if line.strip())
 _SIDEBET_LABELS = {"power_poker": "Power Poker", "star21": "Star 21", "dealer_buster": "Dealer Buster"}
 
 
-def handle_command(raw: str, session: "GameSession") -> str:
+def handle_command(raw: str, session: "GameSession", round_in_progress: bool = False) -> str:
     """Parse and apply a settings/betting command, returning a feedback string.
 
     Note: the 'confirm' response to a pending hardreset is intercepted
     earlier, in ui.py's _dispatch_command -- it needs stdscr (to blink the
     new shoe) and the current round (to refuse mid-round), neither of
-    which this presentation-agnostic layer has access to.
+    which this presentation-agnostic layer has access to. Likewise
+    round_in_progress (an unsettled round exists) is passed in by the UI for
+    the few commands that mustn't run mid-round.
     """
     raw = raw.strip()
     if not raw:
@@ -99,8 +109,8 @@ def handle_command(raw: str, session: "GameSession") -> str:
 
     head, rest = tokens[0], tokens[1:]
     try:
-        return _dispatch(head, rest, session)
-    except CommandError as exc:
+        return _dispatch(head, rest, session, round_in_progress)
+    except (CommandError, HistoryError) as exc:
         return str(exc)
 
 
@@ -132,7 +142,7 @@ def _parse_int(token: str, name: str) -> int:
         raise CommandError(f"'{token}' is not a valid integer for {name}")
 
 
-def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
+def _dispatch(head: str, rest: List[str], session: "GameSession", round_in_progress: bool = False) -> str:
     rules = session.rules
 
     if head == "das":
@@ -273,6 +283,25 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
             "to its default (anything else cancels)."
         )
 
+    if head == "export":
+        return _export_command(rest, session)
+
+    if head == "backup":
+        history = _require_history(session)
+        if round_in_progress:
+            raise CommandError("Finish the current round before making a backup.")
+        name = history.backup(session)
+        return f"Backup '{name}' saved to {_tilde(BACKUP_DIR / name)}"
+
+    if head == "restore":
+        history = _require_history(session)
+        name = history.find_backup(_require(rest, 0, "restore <backup name>  (see 'backups')"))
+        session.pending_restore = name
+        return (
+            f"Type 'confirm' to replace ALL current data (history, bankroll, rules, stats) with backup '{name}'. "
+            "A safety backup of the current data is taken first (anything else cancels)."
+        )
+
     if head in ("help", "?"):
         return HELP_TEXT
 
@@ -281,6 +310,45 @@ def _dispatch(head: str, rest: List[str], session: "GameSession") -> str:
         return "Quitting..."
 
     raise CommandError(f"Unknown command: '{head}' (try 'help')")
+
+
+def _tilde(path) -> str:
+    """A path with the home directory shortened to ~, for compact messages."""
+    text = str(path)
+    home = str(Path.home())
+    return "~" + text[len(home):] if text.startswith(home) else text
+
+
+def _require_history(session: "GameSession"):
+    if session.history is None or session.history.conn is None:
+        detail = f" ({session.history.error})" if session.history is not None and session.history.error else ""
+        raise CommandError(f"History database is unavailable{detail}.")
+    return session.history
+
+
+def _export_command(rest: List[str], session: "GameSession") -> str:
+    """'export [hands|sessions|shoes|stats|all] [csv|json]' -- either
+    argument may be omitted (defaults: all, csv) and they can come in
+    either order."""
+    usage = "Usage: export [hands|sessions|shoes|stats|all] [csv|json]"
+    what, fmt = "all", "csv"
+    if len(rest) > 2:
+        raise CommandError(usage)
+    for token in rest:
+        if token in EXPORT_FORMATS:
+            fmt = token
+        elif token in EXPORT_TABLES or token in ("stats", "all"):
+            what = token
+        else:
+            raise CommandError(usage)
+    history = _require_history(session)
+    if what == "stats":
+        history.export_stats(session, fmt)
+        exported = "stats"
+    else:
+        history.export(what, fmt)
+        exported = ", ".join(EXPORT_TABLES) if what == "all" else what
+    return f"Exported {exported} ({fmt}) to {_tilde(EXPORT_DIR)}"
 
 
 def _rsa_command(rest: List[str], session: "GameSession") -> str:

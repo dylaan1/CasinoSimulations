@@ -4,11 +4,12 @@ import copy
 import random
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
 from .cards import Card, Shoe, TEN_VALUE_RANKS, hilo_value
 from .dealer import play_dealer_hand
 from .hand import Hand
+from .history import HistoryError
 from .rules import RANDOM_PENETRATION_RANGE, Rules
 from .sidebets import (
     buster_table_key,
@@ -20,6 +21,9 @@ from .sidebets import (
     star21_table_key,
 )
 from .stats import Stats
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .history import HistoryDB
 
 OUTCOME_LABELS = {
     "player_win": "Win",
@@ -136,6 +140,8 @@ class SideBetResult:
     label: Optional[str]
     payout_multiplier: float
     win_amount: float
+    bet_key: str = ""  # "power_poker" | "star21" | "dealer_buster" | "insurance"
+    category_key: Optional[str] = None  # payout-table key that hit, e.g. "royalflush" (None on a loss)
 
 
 @dataclass
@@ -156,7 +162,9 @@ class GameSession:
         stats: Stats,
         wagers: Optional[List[float]] = None,
         side_bet_wagers: Optional[List[Dict[str, float]]] = None,
+        history: Optional["HistoryDB"] = None,
     ):
+        self.history = history
         self.rules = rules
         self.bankroll = bankroll
         self.stats = stats
@@ -172,6 +180,10 @@ class GameSession:
         self._quit = False
         self.pending_confirmation: Optional[str] = None  # "newshoe" | "newsession" | "bank_reset", awaiting a RETURN to confirm
         self.pending_hard_reset = False  # awaiting the literal word "confirm" typed as a command
+        self.pending_restore: Optional[str] = None  # backup name awaiting the literal word "confirm"
+        if self.history is not None:
+            self.history.start_session(self)
+            self.history.shoe_cut(self, "start")
 
     def _enforce_sidebet_deck_gate(self) -> None:
         """Power Poker (3+ decks) and Star 21 (2+ decks) are firmly disabled
@@ -229,6 +241,23 @@ class GameSession:
             lo, hi = RANDOM_PENETRATION_RANGE
             self.rules.penetration = round(random.uniform(lo, hi), 2)
 
+    def _cut_shoe(self, reason: str, count_cut: bool = True) -> None:
+        """Retire the current shoe and cut a brand-new one -- the single
+        path every reshuffle after the first goes through, so the history
+        log sees each one (with `reason`) no matter what triggered it.
+        count_cut=False is for the session-reset paths, whose stats reset
+        already puts shoes_played back at 1 for the shoe being cut."""
+        self._roll_penetration()
+        if self.history is not None:
+            self.history.shoe_retired(self)
+        self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
+        self._enforce_sidebet_deck_gate()
+        self._commit_active_rules()
+        if count_cut:
+            self.stats.record_shoe_cut()
+        if self.history is not None:
+            self.history.shoe_cut(self, reason)
+
     def ensure_shoe_ready(self) -> bool:
         """Cut a fresh shoe if penetration was reached (or too few cards remain).
 
@@ -240,40 +269,66 @@ class GameSession:
         an already-placed bet.
         """
         if self.shoe.penetration_reached or self.shoe.cards_remaining < 15:
-            self._roll_penetration()
-            self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
-            self._enforce_sidebet_deck_gate()
-            self._commit_active_rules()
-            self.stats.record_shoe_cut()
+            self._cut_shoe("penetration")
             return True
         return False
 
-    def reset_shoe(self) -> None:
+    def reset_shoe(self, reason: str = "newshoe", count_cut: bool = True) -> None:
         """Forcibly cut a brand-new shoe, e.g. from the 'newshoe' command."""
-        self._roll_penetration()
-        self.shoe = Shoe(self.rules.num_decks, self.rules.penetration)
-        self._enforce_sidebet_deck_gate()
-        self._commit_active_rules()
-        self.stats.record_shoe_cut()
+        self._cut_shoe(reason, count_cut)
 
     def reset_bankroll(self) -> None:
         """Reset the bankroll to its configured default (see 'bank default'),
         e.g. from the 'bank reset' command. Touches nothing else."""
         self.bankroll = self.rules.default_bankroll
 
-    def reset_session(self) -> None:
+    def reset_session(self, reason: str = "newsession") -> None:
         """Forcibly cut a brand-new shoe and clear session-scoped stats.
-        Bankroll is left untouched -- see reset_bankroll()/reset_hard()."""
-        self.reset_shoe()
+        Bankroll is left untouched -- see reset_bankroll()/reset_hard().
+
+        The history log closes out the old session before anything is
+        zeroed and opens the new one before the new shoe is cut, so that
+        shoe is logged under the session it actually belongs to."""
+        if self.history is not None:
+            self.history.end_session(self, reason)
         self.stats.reset_session()
+        if self.history is not None:
+            self.history.start_session(self)
+        self.reset_shoe(reason, count_cut=False)
 
     def reset_hard(self) -> None:
         """Full reset for 'hardreset': new shoe, session stats, lifetime
-        stats, and the bankroll, all back to their defaults."""
-        self.reset_shoe()
+        stats, and the bankroll, all back to their defaults. The history
+        log itself is deliberately NOT cleared -- it only records that the
+        session ended here."""
+        if self.history is not None:
+            self.history.end_session(self, "hardreset")
         self.stats.reset_session()
         self.stats.reset_lifetime()
         self.reset_bankroll()
+        if self.history is not None:
+            self.history.start_session(self)
+        self.reset_shoe("hardreset", count_cut=False)
+
+    def restore_backup(self, name: str) -> Optional[str]:
+        """Replace ALL current data (history database, bankroll, rules,
+        lifetime stats, wagers) with a saved backup, then start a fresh
+        session on a new shoe. Returns an error string, or None on success.
+        The caller must make sure no round is in progress."""
+        if self.history is None:
+            return "History database is unavailable."
+        try:
+            bankroll, rules, stats, wagers, side_bet_wagers = self.history.restore(self, name)
+        except HistoryError as exc:
+            return str(exc)
+        self.bankroll = bankroll
+        self.rules = rules
+        self.stats = stats
+        self.wagers = wagers
+        self.side_bet_wagers = side_bet_wagers
+        self.history.start_session(self)
+        self.reset_shoe("restore", count_cut=False)
+        return None
 
     def try_set_wager(self, hand_index: int, amount: float) -> Optional[str]:
         """Set the main wager for a hand slot. Returns an error string, or None on success.
@@ -329,6 +384,11 @@ class Round:
         self.stats_before = copy.deepcopy(session.stats)
         self.running_count_before = session.shoe.running_count
         self.cards_dealt_before = session.shoe.cards_dealt
+        # The same three numbers a player sees when sizing this round's
+        # wager, plus the bankroll before that wager comes off it -- kept
+        # for the history log.
+        self.true_count_before = session.shoe.true_count
+        self.bankroll_before = session.bankroll
 
         num_hands = self.rules.num_hands
 
@@ -400,6 +460,10 @@ class Round:
         self.peeked = False
         self.results: List[HandResult] = []
         self.side_bet_results: List[SideBetResult] = []
+        # (spot index, bet key) -> the payout category that occurred for that
+        # spot's side bet, wagered or not (None = no category hit). Feeds the
+        # history log's per-hand side-bet columns.
+        self.sidebet_categories: Dict[Tuple[int, str], Optional[str]] = {}
 
         self._play_cursor = 0
         self._current_hand_index = 0
@@ -914,6 +978,7 @@ class Round:
                     self.session.stats.record_sidebet_occurrence(key, category_key)
                 else:
                     label, multiplier = None, 0.0
+                self.sidebet_categories[(spot.index, key)] = category_key
 
                 wager = spot.side_bet_wagers.get(key, 0.0)
                 if wager <= 0:
@@ -923,7 +988,9 @@ class Round:
                     self.session.adjust_bankroll(win)
                     self.session.stats.record_sidebet_win(key, category_key)
                 self.session.stats.record_side_bet(wager, win, bet_key=key)
-                self.side_bet_results.append(SideBetResult(spot.index, name, wager, label, multiplier, win))
+                self.side_bet_results.append(
+                    SideBetResult(spot.index, name, wager, label, multiplier, win, key, category_key)
+                )
 
     def _settle_insurance(self) -> None:
         """Insurance settles the instant the dealer's hole card is peeked
@@ -938,7 +1005,7 @@ class Round:
             if win:
                 self.session.adjust_bankroll(win)
             self.session.stats.record_side_bet(wager, win)
-            self.side_bet_results.append(SideBetResult(spot.index, "Insurance", wager, None, 2.0, win))
+            self.side_bet_results.append(SideBetResult(spot.index, "Insurance", wager, None, 2.0, win, "insurance"))
 
     def _settle_buster(self) -> None:
         """Dealer Buster can't resolve until the dealer's hand is fully
@@ -956,6 +1023,7 @@ class Round:
         else:
             label, multiplier = None, 0.0
         for spot in self.spots:
+            self.sidebet_categories[(spot.index, "dealer_buster")] = category_key
             buster_wager = spot.side_bet_wagers.get("dealer_buster", 0.0)
             if buster_wager <= 0:
                 continue
@@ -965,7 +1033,10 @@ class Round:
                 self.session.stats.record_sidebet_win("dealer_buster", category_key)
             self.session.stats.record_side_bet(buster_wager, win)
             self.side_bet_results.append(
-                SideBetResult(spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win)
+                SideBetResult(
+                    spot.index, SIDE_BET_LABELS["dealer_buster"], buster_wager, label, multiplier, win,
+                    "dealer_buster", category_key,
+                )
             )
 
     def _settle_round(self) -> None:
